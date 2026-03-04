@@ -1,0 +1,4 @@
+import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
+export function StatusHeader({ isConnected }) {
+    return (_jsx("div", { className: "bg-slate-800 border-b border-slate-700", children: _jsxs("div", { className: "max-w-7xl mx-auto px-6 py-4 flex items-center justify-between", children: [_jsxs("div", { children: [_jsx("h1", { className: "text-3xl font-bold text-white", children: "\uD83C\uDF99\uFE0F Voice Assistant" }), _jsx("p", { className: "text-slate-400 text-sm mt-1", children: "Real-time streaming pipeline test client" })] }), _jsxs("div", { className: "flex items-center gap-3", children: [_jsx("div", { className: `w-3 h-3 rounded-full ${isConnected ? 'bg-green-500 pulse-ring' : 'bg-red-500'}` }), _jsx("span", { className: "text-sm font-medium", children: isConnected ? 'Connected' : 'Disconnected' })] })] }) }));
+}
