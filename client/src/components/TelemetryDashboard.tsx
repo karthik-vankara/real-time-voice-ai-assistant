@@ -20,12 +20,13 @@ export function TelemetryDashboard({ metrics }: TelemetryDashboardProps) {
     const isGood = percentage < 50
     const isOkay = percentage < 80
     const color = isGood ? 'bg-green-600' : isOkay ? 'bg-amber-600' : 'bg-red-600'
+    const roundedValue = value.toFixed(5)
 
     return (
       <div className="bg-slate-700 rounded-lg p-4">
         <p className="text-sm text-slate-400 mb-2">{label}</p>
         <div className="flex items-end gap-2 mb-2">
-          <span className="text-3xl font-bold">{value}</span>
+          <span className="text-3xl font-bold">{roundedValue}</span>
           <span className="text-sm text-slate-400">{unit}</span>
         </div>
         <div className="w-full bg-slate-600 rounded-full h-2 overflow-hidden">

@@ -101,6 +101,19 @@ class ServerConfig:
     require_tls: bool = True
 
 
+def _load_server_config() -> ServerConfig:
+    """Load server config from environment variables."""
+    require_tls_str = os.getenv("SERVER_REQUIRE_TLS", "true").lower()
+    require_tls = require_tls_str not in ("false", "0", "no", "off")
+
+    return ServerConfig(
+        host=os.getenv("SERVER_HOST", "0.0.0.0"),
+        port=int(os.getenv("SERVER_PORT", "8000")),
+        ws_path=os.getenv("SERVER_WS_PATH", "/ws"),
+        require_tls=require_tls,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ProviderConfig:
     """External service provider URLs and API keys."""
@@ -150,11 +163,15 @@ class AppConfig:
 
     audio: AudioConfig = field(default_factory=AudioConfig)
     latency: LatencyBudgetMs = field(default_factory=LatencyBudgetMs)
-    circuit_breaker: CircuitBreakerConfig = field(default_factory=CircuitBreakerConfig)
+    circuit_breaker: CircuitBreakerConfig = field(
+        default_factory=CircuitBreakerConfig
+    )
     session: SessionConfig = field(default_factory=SessionConfig)
-    service_timeout: ServiceTimeoutConfig = field(default_factory=ServiceTimeoutConfig)
+    service_timeout: ServiceTimeoutConfig = field(
+        default_factory=ServiceTimeoutConfig
+    )
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
-    server: ServerConfig = field(default_factory=ServerConfig)
+    server: ServerConfig = field(default_factory=_load_server_config)
     provider: ProviderConfig = field(default_factory=_load_provider_config)
 
 

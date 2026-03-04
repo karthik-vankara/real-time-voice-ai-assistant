@@ -59,7 +59,16 @@ function App() {
                 const response = await fetch('http://localhost:8000/telemetry/latency');
                 if (response.ok) {
                     const data = await response.json();
-                    setMetrics(data);
+                    console.log(`📊 Raw telemetry response:`, data);
+                    // Transform backend response to frontend LatencyMetrics format
+                    const totalE2E = data.percentiles?.total_e2e || { p50: 0, p95: 0, p99: 0 };
+                    const transformed = {
+                        p50_ms: totalE2E.p50,
+                        p95_ms: totalE2E.p95,
+                        p99_ms: totalE2E.p99,
+                    };
+                    console.log(`📊 Transformed metrics: P50=${transformed.p50_ms}ms P95=${transformed.p95_ms}ms P99=${transformed.p99_ms}ms (${data.sample_count} samples)`);
+                    setMetrics(transformed);
                 }
             }
             catch (error) {

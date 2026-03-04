@@ -54,7 +54,9 @@ def validate_audio_frame(data: bytes) -> str | None:
     """Return an error message if *data* is not valid 16-bit PCM, else None."""
     if not data:
         return "Empty audio frame"
+    logger.debug(f"Audio frame validation: {len(data)} bytes ({len(data) % 2 == 0 and 'even' or 'ODD!'})")
     if len(data) % 2 != 0:
+        logger.error(f"Audio frame has ODD length: {len(data)} bytes")
         return "Audio frame length is not a multiple of 2 (expected 16-bit PCM)"
     try:
         struct.unpack_from("<h", data, 0)
@@ -145,8 +147,11 @@ async def _session_loop(ws: WebSocket, session: Session) -> None:
             # Binary audio frames
             data: bytes = message.get("bytes", b"")
             if not data:
+                logger.debug(f"Empty audio frame received, message keys: {list(message.keys())}")
                 continue
 
+            logger.debug(f"Raw audio frame: len={len(data)} bytes, first_key={'bytes' in message}, type={type(data)}")
+            
             # Barge-in detection (FR-012, T029)
             if active_task and not active_task.done():
                 active_task.cancel()

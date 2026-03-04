@@ -81,9 +81,25 @@ export class WebSocketClient {
 
   sendAudio(audioData: Uint8Array): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      const byteLength = audioData.byteLength
+      const isEven = byteLength % 2 === 0
+      console.log(`📤 Sending ${byteLength} bytes (${isEven ? 'EVEN ✅' : 'ODD ❌'})`)
+      if (!isEven) {
+        console.error(`ERROR: Attempting to send ODD number of bytes: ${byteLength}`)
+      }
       this.ws.send(audioData)
     } else {
-      console.warn('WebSocket is not connected')
+      console.warn('⚠️ WebSocket is not connected')
+    }
+  }
+
+  sendControl(action: string): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      const message = JSON.stringify({ action })
+      console.log(`📤 Sending control message: ${action}`)
+      this.ws.send(message)
+    } else {
+      console.warn(`⚠️ WebSocket is not connected, cannot send control: ${action}`)
     }
   }
 
