@@ -105,6 +105,50 @@ tests/
 
 5. **Replay mode design**: Recording sessions as timestamped JSON (not raw binary) makes them human-inspectable and version-controllable. The delay multiplier enables stress testing degradation paths.
 
+## Testing with Mock Providers
+
+For rapid testing **without API keys**, the system includes mock ASR/LLM/TTS services that simulate realistic provider behavior:
+
+```bash
+# 1. Set mock mode in .env (or leave PROVIDER_MODE=mock)
+export PROVIDER_MODE=mock
+
+# 2. Start both mock services + main app (all-in-one script)
+python run_local_mock.py
+
+# Alternatively, run them separately:
+# Terminal 1: Mock providers on :9000
+python -m src.mock_providers
+
+# Terminal 2: Main app on :8000
+export PROVIDER_MODE=mock
+uvicorn src.server:app --reload
+```
+
+**What the mocks do:**
+- **ASR mock** (`/asr/stream`): Returns streaming transcription events (provisional + final)
+- **LLM mock** (`/llm/stream`): Returns token-by-token LLM response
+- **TTS mock** (`/tts/stream`): Returns synthesized audio chunks (440 Hz sine wave tone)
+
+All mocks introduce realistic latencies (20-50ms per event) to simulate network conditions.
+
+**Switching to Real Providers:**
+When you have API keys, simply update `.env`:
+
+```bash
+# Switch mode
+PROVIDER_MODE=real
+
+# Configure real provider URLs and API keys
+ASR_PROVIDER_URL=https://api.openai.com/v1/audio/transcriptions
+ASR_API_KEY=sk-...
+# ... etc
+```
+
+Then restart the server. No code changes needed—configuration is loaded at startup.
+
+---
+
 ## Running the Server
 
 ### Prerequisites & Setup
@@ -134,10 +178,12 @@ This installs all runtime + development dependencies (pytest, ruff, etc.) and en
 # Copy the example .env file
 cp .env.example .env
 
-# Edit .env with your actual provider credentials:
-# - ASR_PROVIDER_URL & ASR_API_KEY
-# - LLM_PROVIDER_URL & LLM_API_KEY  
-# - TTS_PROVIDER_URL & TTS_API_KEY
+# For quick testing with mocks (recommended):
+# Leave PROVIDER_MODE=mock (already set in .env.example)
+
+# For production with real APIs:
+# Edit .env and set PROVIDER_MODE=real
+# Then add your provider URLs and API keys
 nano .env
 ```
 
@@ -145,11 +191,12 @@ nano .env
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ASR_PROVIDER_URL` | `http://localhost:9001/asr/stream` | Speech-to-text provider endpoint |
+| `PROVIDER_MODE` | `mock` | `"mock"` for testing without API keys, `"real"` for production |
+| `ASR_PROVIDER_URL` | `http://localhost:9000/asr/stream` | Speech-to-text provider endpoint (mock) or real provider URL |
 | `ASR_API_KEY` | `` (empty) | API key for ASR provider authentication |
-| `LLM_PROVIDER_URL` | `http://localhost:9002/llm/stream` | Language model provider endpoint |
+| `LLM_PROVIDER_URL` | `http://localhost:9000/llm/stream` | Language model provider endpoint (mock) or real provider URL |
 | `LLM_API_KEY` | `` (empty) | API key for LLM provider authentication |
-| `TTS_PROVIDER_URL` | `http://localhost:9003/tts/stream` | Text-to-speech provider endpoint |
+| `TTS_PROVIDER_URL` | `http://localhost:9000/tts/stream` | Text-to-speech provider endpoint (mock) or real provider URL |
 | `TTS_API_KEY` | `` (empty) | API key for TTS provider authentication |
 | `SERVER_HOST` | `0.0.0.0` | Server bind address |
 | `SERVER_PORT` | `8000` | Server port |
@@ -198,15 +245,35 @@ async def mock_tts(request_data: dict):
 
 ### Start the Server
 
+**Quick start with mock providers (recommended for testing)**:
+```bash
+# One command to start mock services + main app
+python run_local_mock.py
+```
+
+This starts:
+- Mock providers on `http://localhost:9000` (ASR/LLM/TTS endpoints)
+- Main app on `http://localhost:8000` (WebSocket server)
+
+**Manual startup** (separate terminals):
 ```bash
 # Activate venv
 source .venv/bin/activate
 
-# Start server
-uvicorn src.server:app --host 0.0.0.0 --port 8000 --reload
+# Terminal 1: Start mock providers
+python -m src.mock_providers
 
-# The server will listen on ws://localhost:8000/ws (local dev)
-# For production, enable TLS: SERVER_REQUIRE_TLS=true
+# Terminal 2: Start main app
+export PROVIDER_MODE=mock
+uvicorn src.server:app --host 0.0.0.0 --port 8000 --reload
+```
+
+**Production with real providers**:
+```bash
+source .venv/bin/activate
+export PROVIDER_MODE=real  # Use .env for configuration
+export ASR_PROVIDER_URL=... ASR_API_KEY=... # etc
+uvicorn src.server:app --host 0.0.0.0 --port 8000
 ```
 
 ### Health Check

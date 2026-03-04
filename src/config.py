@@ -114,15 +114,34 @@ class ProviderConfig:
 
 
 def _load_provider_config() -> ProviderConfig:
-    """Load provider URLs and API keys from environment variables."""
-    return ProviderConfig(
-        asr_url=os.getenv("ASR_PROVIDER_URL", "http://localhost:9001/asr/stream"),
-        asr_api_key=os.getenv("ASR_API_KEY", ""),
-        llm_url=os.getenv("LLM_PROVIDER_URL", "http://localhost:9002/llm/stream"),
-        llm_api_key=os.getenv("LLM_API_KEY", ""),
-        tts_url=os.getenv("TTS_PROVIDER_URL", "http://localhost:9003/tts/stream"),
-        tts_api_key=os.getenv("TTS_API_KEY", ""),
-    )
+    """Load provider URLs and API keys from environment variables.
+
+    Supports two modes via PROVIDER_MODE:
+    - "mock": Use mock services on localhost:9000 (for testing without API keys)
+    - "real": Use URLs from ASR/LLM/TTS_PROVIDER_URL env vars (production)
+    """
+    mode = os.getenv("PROVIDER_MODE", "real").lower()
+
+    if mode == "mock":
+        # Mock services point to single localhost:9000
+        return ProviderConfig(
+            asr_url="http://localhost:9000/asr/stream",
+            asr_api_key="",
+            llm_url="http://localhost:9000/llm/stream",
+            llm_api_key="",
+            tts_url="http://localhost:9000/tts/stream",
+            tts_api_key="",
+        )
+    else:
+        # Real providers from env vars
+        return ProviderConfig(
+            asr_url=os.getenv("ASR_PROVIDER_URL", "http://localhost:9001/asr/stream"),
+            asr_api_key=os.getenv("ASR_API_KEY", ""),
+            llm_url=os.getenv("LLM_PROVIDER_URL", "http://localhost:9002/llm/stream"),
+            llm_api_key=os.getenv("LLM_API_KEY", ""),
+            tts_url=os.getenv("TTS_PROVIDER_URL", "http://localhost:9003/tts/stream"),
+            tts_api_key=os.getenv("TTS_API_KEY", ""),
+        )
 
 
 @dataclass(frozen=True, slots=True)
