@@ -3,11 +3,25 @@
 Latency budgets, timeouts, audio format defaults, and circuit breaker
 thresholds.  All values sourced from the constitution performance standards
 and spec clarifications.
+
+Environment variables (via .env):
+  - ASR_PROVIDER_URL, ASR_API_KEY
+  - LLM_PROVIDER_URL, LLM_API_KEY
+  - TTS_PROVIDER_URL, TTS_API_KEY
+  - SERVER_HOST, SERVER_PORT, SERVER_REQUIRE_TLS
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
+
+# Load .env if available (for local dev)
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +102,30 @@ class ServerConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class ProviderConfig:
+    """External service provider URLs and API keys."""
+
+    asr_url: str
+    asr_api_key: str
+    llm_url: str
+    llm_api_key: str
+    tts_url: str
+    tts_api_key: str
+
+
+def _load_provider_config() -> ProviderConfig:
+    """Load provider URLs and API keys from environment variables."""
+    return ProviderConfig(
+        asr_url=os.getenv("ASR_PROVIDER_URL", "http://localhost:9001/asr/stream"),
+        asr_api_key=os.getenv("ASR_API_KEY", ""),
+        llm_url=os.getenv("LLM_PROVIDER_URL", "http://localhost:9002/llm/stream"),
+        llm_api_key=os.getenv("LLM_API_KEY", ""),
+        tts_url=os.getenv("TTS_PROVIDER_URL", "http://localhost:9003/tts/stream"),
+        tts_api_key=os.getenv("TTS_API_KEY", ""),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class AppConfig:
     """Root application configuration aggregating all sub-configs."""
 
@@ -98,6 +136,7 @@ class AppConfig:
     service_timeout: ServiceTimeoutConfig = field(default_factory=ServiceTimeoutConfig)
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+    provider: ProviderConfig = field(default_factory=_load_provider_config)
 
 
 # Singleton default configuration — importable anywhere

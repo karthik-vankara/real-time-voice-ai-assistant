@@ -15,16 +15,13 @@ from src.config import config
 from src.models.events import LLMTokenEvent, LLMTokenPayload
 from src.telemetry.logger import logger
 
-# Default provider URL
-LLM_PROVIDER_URL: str = "http://localhost:9002/llm/stream"
-
 
 async def generate_response_stream(
     user_text: str,
     context: list[dict[str, str]],
     *,
     correlation_id: str,
-    provider_url: str = LLM_PROVIDER_URL,
+    provider_url: str | None = None,
 ) -> AsyncIterator[LLMTokenEvent]:
     """Stream tokens from the LLM provider.
 
@@ -32,6 +29,7 @@ async def generate_response_stream(
     - POST JSON body: ``{"messages": [...], "stream": true}``
     - Response: newline-delimited JSON with ``{"token": str, "done": bool}``
     """
+    provider_url = provider_url or config.provider.llm_url
     messages = [*context, {"role": "user", "content": user_text}]
     payload = {"messages": messages, "stream": True}
 
@@ -94,9 +92,10 @@ async def generate_response(
     context: list[dict[str, str]],
     *,
     correlation_id: str,
-    provider_url: str = LLM_PROVIDER_URL,
+    provider_url: str | None = None,
 ) -> str:
     """Non-streaming convenience: generate full response text."""
+    provider_url = provider_url or config.provider.llm_url
     accumulated = ""
     async for event in generate_response_stream(
         user_text, context, correlation_id=correlation_id, provider_url=provider_url

@@ -23,15 +23,12 @@ from src.models.events import (
 )
 from src.telemetry.logger import logger
 
-# Default provider URL (overridden in tests / env)
-ASR_PROVIDER_URL: str = "http://localhost:9001/asr/stream"
-
 
 async def transcribe_stream(
     audio_chunks: AsyncIterator[bytes],
     *,
     correlation_id: str,
-    provider_url: str = ASR_PROVIDER_URL,
+    provider_url: str | None = None,
 ) -> AsyncIterator[TranscriptionFinalEvent | TranscriptionProvisionalEvent]:
     """Stream audio chunks to the ASR provider and yield transcription events.
 
@@ -43,6 +40,7 @@ async def transcribe_stream(
     - Response: newline-delimited JSON objects with keys:
       ``{"text": str, "is_final": bool}``
     """
+    provider_url = provider_url or config.provider.asr_url
     timeout = httpx.Timeout(
         connect=config.service_timeout.connect_timeout,
         read=config.service_timeout.asr_timeout,
@@ -110,12 +108,13 @@ async def transcribe_audio(
     audio_data: bytes,
     *,
     correlation_id: str,
-    provider_url: str = ASR_PROVIDER_URL,
+    provider_url: str | None = None,
 ) -> str:
     """Convenience: transcribe a complete audio buffer and return final text.
 
     Useful for replay mode and simple callers that don't need streaming.
     """
+    provider_url = provider_url or config.provider.asr_url
     timeout = httpx.Timeout(
         connect=config.service_timeout.connect_timeout,
         read=config.service_timeout.asr_timeout,

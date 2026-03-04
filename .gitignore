@@ -28,7 +28,9 @@ Thumbs.db
 
 # Environment
 .env
-.env.*
+.env.local
+.env.*.local
+!.env.example
 
 # Testing / Coverage
 .coverage

@@ -15,15 +15,12 @@ from src.config import config
 from src.models.events import TTSAudioChunkEvent, TTSAudioChunkPayload
 from src.telemetry.logger import logger
 
-# Default provider URL
-TTS_PROVIDER_URL: str = "http://localhost:9003/tts/stream"
-
 
 async def synthesize_stream(
     text: str,
     *,
     correlation_id: str,
-    provider_url: str = TTS_PROVIDER_URL,
+    provider_url: str | None = None,
 ) -> AsyncIterator[TTSAudioChunkEvent]:
     """Stream audio chunks from the TTS provider.
 
@@ -32,6 +29,7 @@ async def synthesize_stream(
     - Response: newline-delimited JSON with
       ``{"audio_b64": str, "chunk_index": int, "is_last": bool}``
     """
+    provider_url = provider_url or config.provider.tts_url
     payload = {"text": text}
     timeout = httpx.Timeout(
         connect=config.service_timeout.connect_timeout,
@@ -92,9 +90,10 @@ async def synthesize_full(
     text: str,
     *,
     correlation_id: str,
-    provider_url: str = TTS_PROVIDER_URL,
+    provider_url: str | None = None,
 ) -> bytes:
     """Non-streaming convenience: synthesize full audio and return raw bytes."""
+    provider_url = provider_url or config.provider.tts_url
     chunks: list[bytes] = []
     async for event in synthesize_stream(
         text, correlation_id=correlation_id, provider_url=provider_url

@@ -107,16 +107,142 @@ tests/
 
 ## Running the Server
 
+### Prerequisites & Setup
+
+1. **Clone the repository**:
 ```bash
-# Install dependencies
+git clone git@github.com:karthik-vankara/real-time-voice-ai-assistant.git
+cd real-time-voice-ai-assistant
+```
+
+2. **Create a Python virtual environment**:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate  # On macOS/Linux
+# or
+.venv\Scripts\activate  # On Windows
+```
+
+3. **Install dependencies**:
+```bash
 pip install -e ".[dev]"
+```
+This installs all runtime + development dependencies (pytest, ruff, etc.) and enables python-dotenv for environment variable loading.
 
-# Start server (local dev, TLS disabled)
-uvicorn src.server:app --host 0.0.0.0 --port 8000
+4. **Configure environment variables**:
+```bash
+# Copy the example .env file
+cp .env.example .env
 
-# Health check
+# Edit .env with your actual provider credentials:
+# - ASR_PROVIDER_URL & ASR_API_KEY
+# - LLM_PROVIDER_URL & LLM_API_KEY  
+# - TTS_PROVIDER_URL & TTS_API_KEY
+nano .env
+```
+
+**Environment Variables Reference**:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ASR_PROVIDER_URL` | `http://localhost:9001/asr/stream` | Speech-to-text provider endpoint |
+| `ASR_API_KEY` | `` (empty) | API key for ASR provider authentication |
+| `LLM_PROVIDER_URL` | `http://localhost:9002/llm/stream` | Language model provider endpoint |
+| `LLM_API_KEY` | `` (empty) | API key for LLM provider authentication |
+| `TTS_PROVIDER_URL` | `http://localhost:9003/tts/stream` | Text-to-speech provider endpoint |
+| `TTS_API_KEY` | `` (empty) | API key for TTS provider authentication |
+| `SERVER_HOST` | `0.0.0.0` | Server bind address |
+| `SERVER_PORT` | `8000` | Server port |
+| `SERVER_REQUIRE_TLS` | `false` | Enforce WebSocket Secure (WSS) for production |
+
+### Example Provider Integrations
+
+**OpenAI (ASR + TTS via Whisper + TTS APIs)**:
+```bash
+ASR_PROVIDER_URL=https://api.openai.com/v1/audio/transcriptions
+ASR_API_KEY=sk-...
+
+LLM_PROVIDER_URL=https://api.openai.com/v1/chat/completions
+LLM_API_KEY=sk-...
+
+TTS_PROVIDER_URL=https://api.openai.com/v1/audio/speech
+TTS_API_KEY=sk-...
+```
+
+**Local Mock Services** (for testing):
+For development without real API keys, you can mock the services on localhost:
+- ASR mock on 9001
+- LLM mock on 9002
+- TTS mock on 9003
+
+Example mock server (Python):
+```python
+# mock_services.py - simple async server returning valid responses
+from fastapi import FastAPI
+
+app = FastAPI()
+
+@app.post("/asr/stream")
+async def mock_asr(request: bytes):
+    return {"text": "hello world", "is_final": True}
+
+@app.post("/llm/stream")
+async def mock_llm(request_data: dict):
+    return {"token": "Hello! ", "done": False}
+
+@app.post("/tts/stream")
+async def mock_tts(request_data: dict):
+    # Return base64-encoded audio chunk
+    return {"audio_b64": "...", "is_last": True}
+```
+
+### Start the Server
+
+```bash
+# Activate venv
+source .venv/bin/activate
+
+# Start server
+uvicorn src.server:app --host 0.0.0.0 --port 8000 --reload
+
+# The server will listen on ws://localhost:8000/ws (local dev)
+# For production, enable TLS: SERVER_REQUIRE_TLS=true
+```
+
+### Health Check
+
+```bash
 curl http://localhost:8000/health
+# Output: {"status": "ok"}
+```
 
-# Telemetry dashboard
+### Telemetry Dashboard
+
+```bash
 curl http://localhost:8000/telemetry/latency
+# Output: {"p50_ms": 850, "p95_ms": 1100, "p99_ms": 1500}
+```
+
+### Client Connection Example
+
+```python
+import asyncio
+import websockets
+import json
+
+async def connect():
+    uri = "ws://localhost:8000/ws"
+    async with websockets.connect(uri) as ws:
+        # Send 16-bit PCM audio chunks
+        audio_chunk = b'\x00\x01\x00\x02...'  # 16kHz, 16-bit mono
+        await ws.send(audio_chunk)
+        
+        # Receive streaming events
+        async for message in ws:
+            event = json.loads(message)
+            print(f"Event: {event['event_type']}")
+            if event['event_type'] == 'tts_audio_chunk':
+                print(f"Received {len(event['payload']['audio_b64'])} bytes of audio")
+
+asyncio.run(connect())
 ```
