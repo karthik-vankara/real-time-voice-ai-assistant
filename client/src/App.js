@@ -128,7 +128,7 @@ function App() {
                             if (!audioCtx) {
                                 return;
                             }
-                            // Decode all base64 chunks to PCM
+                            // Decode all base64 chunks to binary
                             const allBytes = [];
                             for (const b64 of session.chunks) {
                                 const binaryString = atob(b64);
@@ -136,31 +136,20 @@ function App() {
                                     allBytes.push(binaryString.charCodeAt(i));
                                 }
                             }
-                            // Convert to ArrayBuffer for decoding
-                            const audioData = new Uint8Array(allBytes);
-                            // Assume 16-bit PCM, 16kHz mono
-                            // Create AudioBuffer for playback
-                            const sampleRate = 16000;
-                            const audioBuffer = audioCtx.createBuffer(1, // mono
-                            audioData.length / 2, // 16-bit = 2 bytes per sample
-                            sampleRate);
-                            const channelData = audioBuffer.getChannelData(0);
-                            let offset = 0;
-                            for (let i = 0; i < channelData.length; i++) {
-                                // Read 16-bit signed little-endian samples
-                                let sample = audioData[offset] | (audioData[offset + 1] << 8);
-                                // Convert to signed 16-bit
-                                if (sample >= 32768)
-                                    sample -= 65536;
-                                // Normalize to -1.0 to 1.0
-                                channelData[i] = sample / 32768.0;
-                                offset += 2;
-                            }
-                            // Store the audio buffer for manual playback
-                            audioBuffersRef.current.set(correlationId, audioBuffer);
+                            // Convert to ArrayBuffer
+                            const binaryData = new Uint8Array(allBytes);
+                            const arrayBuffer = binaryData.buffer;
+                            // Use Web Audio API to decode the audio (handles MP3, AAC, etc.)
+                            // This replaces the manual PCM decoding since OpenAI returns compressed format
+                            audioCtx.decodeAudioData(arrayBuffer, (decodedBuffer) => {
+                                // Store the decoded AudioBuffer for manual playback
+                                audioBuffersRef.current.set(correlationId, decodedBuffer);
+                            }, (error) => {
+                                console.error('Error decoding audio data:', error);
+                            });
                         }
                         catch (error) {
-                            console.error('Error decoding audio:', error);
+                            console.error('Error processing audio chunks:', error);
                         }
                     };
                     playAudioChunks();
