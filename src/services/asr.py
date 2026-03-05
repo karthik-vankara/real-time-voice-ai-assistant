@@ -25,6 +25,43 @@ from src.models.events import (
 from src.telemetry.logger import logger
 
 
+def _pcm_to_wav(audio_pcm: bytes, sample_rate: int = 16000, channels: int = 1, bit_depth: int = 16) -> bytes:
+    """Convert raw 16-bit PCM audio to WAV format (RIFF container + PCM data).
+    
+    WAV file structure:
+    - RIFF header (12 bytes)
+    - fmt chunk (24 bytes)
+    - data chunk header (8 bytes) + data
+    """
+    bytes_per_sample = bit_depth // 8
+    num_samples = len(audio_pcm) // bytes_per_sample
+    byte_rate = sample_rate * channels * bytes_per_sample
+    block_align = channels * bytes_per_sample
+    
+    # fmt chunk
+    fmt_chunk = b'fmt '
+    fmt_size = 16
+    audio_format = 1  # PCM
+    fmt_data = (
+        fmt_size.to_bytes(4, 'little') +
+        audio_format.to_bytes(2, 'little') +
+        channels.to_bytes(2, 'little') +
+        sample_rate.to_bytes(4, 'little') +
+        byte_rate.to_bytes(4, 'little') +
+        block_align.to_bytes(2, 'little') +
+        bit_depth.to_bytes(2, 'little')
+    )
+    
+    # data chunk
+    data_chunk = b'data' + len(audio_pcm).to_bytes(4, 'little') + audio_pcm
+    
+    # RIFF header
+    file_size = 4 + (8 + len(fmt_data)) + (8 + len(audio_pcm))
+    riff_header = b'RIFF' + file_size.to_bytes(4, 'little') + b'WAVE'
+    
+    return riff_header + fmt_chunk + fmt_data + data_chunk
+
+
 async def transcribe_stream(
     audio_chunks: AsyncIterator[bytes],
     *,
@@ -50,14 +87,17 @@ async def transcribe_stream(
         async for chunk in audio_chunks:
             audio_data += chunk
         
+        # Convert raw PCM to WAV format (Whisper requires valid audio file)
+        wav_data = _pcm_to_wav(audio_data, sample_rate=16000, channels=1, bit_depth=16)
+        
         # Prepare headers
         headers = {}
         if config.provider.asr_api_key:
             headers["Authorization"] = f"Bearer {config.provider.asr_api_key}"
         
-        # Send as multipart form data (OpenAI Whisper format)
+        # Send as multipart form data with WAV file
         files = {
-            "file": ("audio.wav", audio_data, "audio/wav"),
+            "file": ("audio.wav", wav_data, "audio/wav"),
             "model": (None, "whisper-1"),
         }
         
@@ -71,7 +111,7 @@ async def transcribe_stream(
             data = response.json()
             text: str = data.get("text", "")
             
-            # Emit transcription as final (no streaming from Whisper API)
+            # Emit transcription as final
             yield TranscriptionFinalEvent(
                 correlation_id=correlation_id,
                 payload=TranscriptionFinalPayload(text=text),
@@ -121,9 +161,12 @@ async def transcribe_audio(
         if config.provider.asr_api_key:
             headers["Authorization"] = f"Bearer {config.provider.asr_api_key}"
         
-        # Send as multipart form data (OpenAI Whisper format)
+        # Convert raw PCM to WAV format
+        wav_data = _pcm_to_wav(audio_data, sample_rate=16000, channels=1, bit_depth=16)
+        
+        # Send as multipart form data
         files = {
-            "file": ("audio.wav", audio_data, "audio/wav"),
+            "file": ("audio.wav", wav_data, "audio/wav"),
             "model": (None, "whisper-1"),
         }
         
