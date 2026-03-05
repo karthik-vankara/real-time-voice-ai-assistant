@@ -22,13 +22,16 @@ function App() {
     const handlePlayAudio = (correlationId) => {
         const audioBuffer = audioBuffersRef.current.get(correlationId);
         if (!audioBuffer) {
+            console.warn(`Audio buffer not found for ${correlationId}`);
             return;
         }
         const audioCtx = audioContextRef.current;
         if (!audioCtx) {
+            console.error('Audio context not initialized');
             return;
         }
         try {
+            console.log(`Playing audio: ${correlationId}, duration: ${audioBuffer.duration.toFixed(2)}s, channels: ${audioBuffer.numberOfChannels}, sample rate: ${audioBuffer.sampleRate}Hz`);
             const source = audioCtx.createBufferSource();
             source.buffer = audioBuffer;
             source.connect(audioCtx.destination);
@@ -43,6 +46,9 @@ function App() {
             onConnect: () => {
                 setIsConnected(true);
                 setEvents([]);
+                // Clear old audio buffers on new connection
+                audioBuffersRef.current.clear();
+                ttsChunksRef.current.clear();
             },
             onDisconnect: () => {
                 setIsConnected(false);
