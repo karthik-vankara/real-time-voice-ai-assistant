@@ -25,7 +25,7 @@ function App() {
   })
   const [activeTab, setActiveTab] = useState<'transcript' | 'metrics'>('transcript')
   const audioContextRef = useRef<AudioContext | null>(null)
-  const ttsChunksRef = useRef<Map<string, { chunks: string[]; isComplete: boolean }>>(new Map())
+  const ttsChunksRef = useRef<Map<string, { chunks: Map<number, string>; isComplete: boolean; maxIndex: number }>>(new Map())
   const audioBuffersRef = useRef<Map<string, AudioBuffer>>(new Map())
 
   const handlePlayAudio = (correlationId: string) => {
@@ -126,21 +126,23 @@ function App() {
       if (event.event_type === 'tts_audio_chunk') {
         const payload = event.payload as any
         const audio_b64 = payload.audio_b64
+        const chunk_index = payload.chunk_index ?? 0
         const is_last = payload.is_last
         const correlationId = event.correlation_id
 
         if (!ttsChunksRef.current.has(correlationId)) {
-          ttsChunksRef.current.set(correlationId, { chunks: [], isComplete: false })
+          ttsChunksRef.current.set(correlationId, { chunks: new Map(), isComplete: false, maxIndex: 0 })
         }
 
         const session = ttsChunksRef.current.get(correlationId)!
-        
-        // Add chunk if not already stored
-        if (!session.isComplete && audio_b64 && !session.chunks.includes(audio_b64)) {
-          session.chunks.push(audio_b64)
+
+        // Store chunk by index (preserve order, ignore duplicates)
+        if (!session.isComplete && audio_b64) {
+          session.chunks.set(chunk_index, audio_b64)
+          session.maxIndex = Math.max(session.maxIndex, chunk_index)
         }
 
-        // Check is_last SEPARATELY - even if chunk was already stored
+        // When we get the final chunk, decode all accumulated chunks in order
         if (!session.isComplete && is_last) {
           session.isComplete = true
 
@@ -149,16 +151,27 @@ function App() {
             try {
               const audioCtx = audioContextRef.current
               if (!audioCtx) {
+                console.error('Audio context not initialized')
                 return
               }
 
-              // Decode all base64 chunks to binary
+              // Reconstruct audio in proper order using chunk indices
               const allBytes: number[] = []
-              for (const b64 of session.chunks) {
-                const binaryString = atob(b64)
-                for (let i = 0; i < binaryString.length; i++) {
-                  allBytes.push(binaryString.charCodeAt(i))
+              for (let i = 0; i <= session.maxIndex; i++) {
+                const b64 = session.chunks.get(i)
+                if (!b64) {
+                  console.warn(`Missing chunk at index ${i} for correlation ${correlationId}`)
+                  continue
                 }
+                const binaryString = atob(b64)
+                for (let j = 0; j < binaryString.length; j++) {
+                  allBytes.push(binaryString.charCodeAt(j))
+                }
+              }
+
+              if (allBytes.length === 0) {
+                console.error('No audio data to decode')
+                return
               }
 
               // Convert to ArrayBuffer
@@ -166,16 +179,18 @@ function App() {
               const arrayBuffer = binaryData.buffer
 
               // Use Web Audio API to decode the audio (handles MP3, AAC, etc.)
-              // This replaces the manual PCM decoding since OpenAI returns compressed format
               audioCtx.decodeAudioData(
-                arrayBuffer,
+                arrayBuffer.slice(0), // Copy to ensure clean buffer
                 (decodedBuffer) => {
                   // Store the decoded AudioBuffer for manual playback
                   audioBuffersRef.current.set(correlationId, decodedBuffer)
+                  console.log(
+                    `Audio decoded successfully for ${correlationId}: ${session.chunks.size} chunks, ${(arrayBuffer.byteLength / 1024).toFixed(1)}KB`,
+                  )
                 },
                 (error) => {
-                  console.error('Error decoding audio data:', error)
-                }
+                  console.error(`Error decoding audio for ${correlationId}:`, error)
+                },
               )
             } catch (error) {
               console.error('Error processing audio chunks:', error)
