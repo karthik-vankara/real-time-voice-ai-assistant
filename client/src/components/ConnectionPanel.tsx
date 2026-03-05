@@ -28,7 +28,12 @@ export function ConnectionPanel({ ws, isConnected }: ConnectionPanelProps) {
       <div className="space-y-3">
         <div>
           <label className="text-sm text-slate-400">Server URL</label>
-          <p className="text-sm font-mono bg-slate-900 p-2 rounded mt-1">ws://localhost:8000/ws</p>
+          <p className="text-sm font-mono bg-slate-900 p-2 rounded mt-1 break-all">
+            {(() => {
+              const httpBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+              return httpBase.replace(/^https?/, 'ws') + '/ws'
+            })()}
+          </p>
         </div>
 
         <div className="flex gap-2">

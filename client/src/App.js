@@ -42,7 +42,10 @@ function App() {
         }
     };
     useEffect(() => {
-        const client = new WebSocketClient('ws://localhost:8000/ws', {
+        // Build WebSocket URL from HTTP base URL
+        const httpBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+        const wsUrl = httpBase.replace(/^https?/, 'ws') + '/ws';
+        const client = new WebSocketClient(wsUrl, {
             onConnect: () => {
                 setIsConnected(true);
                 setEvents([]);
@@ -103,7 +106,8 @@ function App() {
     useEffect(() => {
         const fetchMetrics = async () => {
             try {
-                const response = await fetch('http://localhost:8000/telemetry/latency');
+                const httpBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+                const response = await fetch(`${httpBase}/telemetry/latency`);
                 if (response.ok) {
                     const data = await response.json();
                     // Transform backend response to frontend LatencyMetrics format
