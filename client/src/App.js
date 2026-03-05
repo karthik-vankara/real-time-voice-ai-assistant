@@ -1,5 +1,5 @@
 import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-runtime";
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { WebSocketClient } from './services/websocket';
 import { ConnectionPanel } from './components/ConnectionPanel';
 import { AudioRecorder } from './components/AudioRecorder';
@@ -16,6 +16,28 @@ function App() {
         p99_ms: 0,
     });
     const [activeTab, setActiveTab] = useState('transcript');
+    const audioContextRef = useRef(null);
+    const ttsChunksRef = useRef(new Map());
+    const audioBuffersRef = useRef(new Map());
+    const handlePlayAudio = (correlationId) => {
+        const audioBuffer = audioBuffersRef.current.get(correlationId);
+        if (!audioBuffer) {
+            return;
+        }
+        const audioCtx = audioContextRef.current;
+        if (!audioCtx) {
+            return;
+        }
+        try {
+            const source = audioCtx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioCtx.destination);
+            source.start(0);
+        }
+        catch (error) {
+            console.error('Error playing audio:', error);
+        }
+    };
     useEffect(() => {
         const client = new WebSocketClient('ws://localhost:8000/ws', {
             onConnect: () => {
@@ -32,7 +54,6 @@ function App() {
                 });
             },
             onError: (error) => {
-                console.error('WebSocket error:', error);
                 setEvents((prev) => [
                     ...prev,
                     {
@@ -59,7 +80,6 @@ function App() {
                 const response = await fetch('http://localhost:8000/telemetry/latency');
                 if (response.ok) {
                     const data = await response.json();
-                    console.log(`📊 Raw telemetry response:`, data);
                     // Transform backend response to frontend LatencyMetrics format
                     const totalE2E = data.percentiles?.total_e2e || { p50: 0, p95: 0, p99: 0 };
                     const transformed = {
@@ -67,21 +87,91 @@ function App() {
                         p95_ms: totalE2E.p95,
                         p99_ms: totalE2E.p99,
                     };
-                    console.log(`📊 Transformed metrics: P50=${transformed.p50_ms}ms P95=${transformed.p95_ms}ms P99=${transformed.p99_ms}ms (${data.sample_count} samples)`);
                     setMetrics(transformed);
                 }
             }
             catch (error) {
-                console.error('Failed to fetch metrics:', error);
+                // Silently handle telemetry fetch errors
             }
         };
         const interval = setInterval(fetchMetrics, 2000);
         return () => clearInterval(interval);
     }, []);
+    // Auto-play TTS audio chunks
+    useEffect(() => {
+        // Initialize audio context on first render
+        if (!audioContextRef.current && typeof AudioContext !== 'undefined') {
+            audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        // Process TTS chunks for playback
+        for (const event of events) {
+            if (event.event_type === 'tts_audio_chunk') {
+                const payload = event.payload;
+                const audio_b64 = payload.audio_b64;
+                const is_last = payload.is_last;
+                const correlationId = event.correlation_id;
+                if (!ttsChunksRef.current.has(correlationId)) {
+                    ttsChunksRef.current.set(correlationId, { chunks: [], isComplete: false });
+                }
+                const session = ttsChunksRef.current.get(correlationId);
+                // Add chunk if not already stored
+                if (!session.isComplete && audio_b64 && !session.chunks.includes(audio_b64)) {
+                    session.chunks.push(audio_b64);
+                }
+                // Check is_last SEPARATELY - even if chunk was already stored
+                if (!session.isComplete && is_last) {
+                    session.isComplete = true;
+                    // Decode and store audio
+                    const playAudioChunks = async () => {
+                        try {
+                            const audioCtx = audioContextRef.current;
+                            if (!audioCtx) {
+                                return;
+                            }
+                            // Decode all base64 chunks to PCM
+                            const allBytes = [];
+                            for (const b64 of session.chunks) {
+                                const binaryString = atob(b64);
+                                for (let i = 0; i < binaryString.length; i++) {
+                                    allBytes.push(binaryString.charCodeAt(i));
+                                }
+                            }
+                            // Convert to ArrayBuffer for decoding
+                            const audioData = new Uint8Array(allBytes);
+                            // Assume 16-bit PCM, 16kHz mono
+                            // Create AudioBuffer for playback
+                            const sampleRate = 16000;
+                            const audioBuffer = audioCtx.createBuffer(1, // mono
+                            audioData.length / 2, // 16-bit = 2 bytes per sample
+                            sampleRate);
+                            const channelData = audioBuffer.getChannelData(0);
+                            let offset = 0;
+                            for (let i = 0; i < channelData.length; i++) {
+                                // Read 16-bit signed little-endian samples
+                                let sample = audioData[offset] | (audioData[offset + 1] << 8);
+                                // Convert to signed 16-bit
+                                if (sample >= 32768)
+                                    sample -= 65536;
+                                // Normalize to -1.0 to 1.0
+                                channelData[i] = sample / 32768.0;
+                                offset += 2;
+                            }
+                            // Store the audio buffer for manual playback
+                            audioBuffersRef.current.set(correlationId, audioBuffer);
+                        }
+                        catch (error) {
+                            console.error('Error decoding audio:', error);
+                        }
+                    };
+                    playAudioChunks();
+                }
+            }
+        }
+    }, [events]);
     return (_jsxs("div", { className: "min-h-screen bg-slate-900 text-slate-100", children: [_jsx(StatusHeader, { isConnected: isConnected }), _jsx("div", { className: "max-w-7xl mx-auto p-6 space-y-6", children: _jsxs("div", { className: "grid grid-cols-1 lg:grid-cols-3 gap-6", children: [_jsxs("div", { className: "lg:col-span-1 space-y-4", children: [_jsx(ConnectionPanel, { ws: ws, isConnected: isConnected }), isConnected && _jsx(AudioRecorder, { ws: ws })] }), _jsx("div", { className: "lg:col-span-2", children: isConnected ? (_jsxs(_Fragment, { children: [_jsxs("div", { className: "flex gap-2 mb-4 border-b border-slate-700", children: [_jsxs("button", { onClick: () => setActiveTab('transcript'), className: `px-4 py-2 font-semibold transition ${activeTab === 'transcript'
                                                     ? 'text-blue-400 border-b-2 border-blue-400'
                                                     : 'text-slate-400 hover:text-slate-300'}`, children: ["Transcript & Events (", events.length, ")"] }), _jsx("button", { onClick: () => setActiveTab('metrics'), className: `px-4 py-2 font-semibold transition ${activeTab === 'metrics'
                                                     ? 'text-blue-400 border-b-2 border-blue-400'
-                                                    : 'text-slate-400 hover:text-slate-300'}`, children: "Telemetry" })] }), activeTab === 'transcript' ? (_jsx(EventsDisplay, { events: events })) : (_jsx(TelemetryDashboard, { metrics: metrics }))] })) : (_jsx("div", { className: "bg-slate-800 border border-slate-700 rounded-lg p-8 text-center", children: _jsx("p", { className: "text-slate-400", children: "Connect to the server first to start testing..." }) })) })] }) })] }));
+                                                    : 'text-slate-400 hover:text-slate-300'}`, children: "Telemetry" })] }), activeTab === 'transcript' ? (_jsx(EventsDisplay, { events: events, onPlayAudio: handlePlayAudio })) : (_jsx(TelemetryDashboard, { metrics: metrics }))] })) : (_jsx("div", { className: "bg-slate-800 border border-slate-700 rounded-lg p-8 text-center", children: _jsx("p", { className: "text-slate-400", children: "Connect to the server first to start testing..." }) })) })] }) })] }));
 }
 export default App;

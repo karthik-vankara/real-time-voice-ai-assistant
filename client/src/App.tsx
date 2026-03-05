@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { WebSocketClient } from './services/websocket'
 import { ConnectionPanel } from './components/ConnectionPanel'
 import { AudioRecorder } from './components/AudioRecorder'
@@ -24,6 +24,30 @@ function App() {
     p99_ms: 0,
   })
   const [activeTab, setActiveTab] = useState<'transcript' | 'metrics'>('transcript')
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const ttsChunksRef = useRef<Map<string, { chunks: string[]; isComplete: boolean }>>(new Map())
+  const audioBuffersRef = useRef<Map<string, AudioBuffer>>(new Map())
+
+  const handlePlayAudio = (correlationId: string) => {
+    const audioBuffer = audioBuffersRef.current.get(correlationId)
+    if (!audioBuffer) {
+      return
+    }
+
+    const audioCtx = audioContextRef.current
+    if (!audioCtx) {
+      return
+    }
+
+    try {
+      const source = audioCtx.createBufferSource()
+      source.buffer = audioBuffer
+      source.connect(audioCtx.destination)
+      source.start(0)
+    } catch (error) {
+      console.error('Error playing audio:', error)
+    }
+  }
 
   useEffect(() => {
     const client = new WebSocketClient(
@@ -43,7 +67,6 @@ function App() {
           })
         },
         onError: (error) => {
-          console.error('WebSocket error:', error)
           setEvents((prev) => [
             ...prev,
             {
@@ -73,8 +96,6 @@ function App() {
         const response = await fetch('http://localhost:8000/telemetry/latency')
         if (response.ok) {
           const data = await response.json()
-          console.log(`📊 Raw telemetry response:`, data)
-          
           // Transform backend response to frontend LatencyMetrics format
           const totalE2E = data.percentiles?.total_e2e || { p50: 0, p95: 0, p99: 0 }
           const transformed: LatencyMetrics = {
@@ -82,17 +103,100 @@ function App() {
             p95_ms: totalE2E.p95,
             p99_ms: totalE2E.p99,
           }
-          console.log(`📊 Transformed metrics: P50=${transformed.p50_ms}ms P95=${transformed.p95_ms}ms P99=${transformed.p99_ms}ms (${data.sample_count} samples)`)
           setMetrics(transformed)
         }
       } catch (error) {
-        console.error('Failed to fetch metrics:', error)
+        // Silently handle telemetry fetch errors
       }
     }
 
     const interval = setInterval(fetchMetrics, 2000)
     return () => clearInterval(interval)
   }, [])
+
+  // Auto-play TTS audio chunks
+  useEffect(() => {
+    // Initialize audio context on first render
+    if (!audioContextRef.current && typeof AudioContext !== 'undefined') {
+      audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)()
+    }
+
+    // Process TTS chunks for playback
+    for (const event of events) {
+      if (event.event_type === 'tts_audio_chunk') {
+        const payload = event.payload as any
+        const audio_b64 = payload.audio_b64
+        const is_last = payload.is_last
+        const correlationId = event.correlation_id
+
+        if (!ttsChunksRef.current.has(correlationId)) {
+          ttsChunksRef.current.set(correlationId, { chunks: [], isComplete: false })
+        }
+
+        const session = ttsChunksRef.current.get(correlationId)!
+        
+        // Add chunk if not already stored
+        if (!session.isComplete && audio_b64 && !session.chunks.includes(audio_b64)) {
+          session.chunks.push(audio_b64)
+        }
+
+        // Check is_last SEPARATELY - even if chunk was already stored
+        if (!session.isComplete && is_last) {
+          session.isComplete = true
+
+          // Decode and store audio
+          const playAudioChunks = async () => {
+            try {
+              const audioCtx = audioContextRef.current
+              if (!audioCtx) {
+                return
+              }
+
+              // Decode all base64 chunks to PCM
+              const allBytes: number[] = []
+              for (const b64 of session.chunks) {
+                const binaryString = atob(b64)
+                for (let i = 0; i < binaryString.length; i++) {
+                  allBytes.push(binaryString.charCodeAt(i))
+                }
+              }
+
+              // Convert to ArrayBuffer for decoding
+              const audioData = new Uint8Array(allBytes)
+
+              // Assume 16-bit PCM, 16kHz mono
+              // Create AudioBuffer for playback
+              const sampleRate = 16000
+              const audioBuffer = audioCtx.createBuffer(
+                1, // mono
+                audioData.length / 2, // 16-bit = 2 bytes per sample
+                sampleRate
+              )
+
+              const channelData = audioBuffer.getChannelData(0)
+              let offset = 0
+              for (let i = 0; i < channelData.length; i++) {
+                // Read 16-bit signed little-endian samples
+                let sample = audioData[offset] | (audioData[offset + 1] << 8)
+                // Convert to signed 16-bit
+                if (sample >= 32768) sample -= 65536
+                // Normalize to -1.0 to 1.0
+                channelData[i] = sample / 32768.0
+                offset += 2
+              }
+
+              // Store the audio buffer for manual playback
+              audioBuffersRef.current.set(correlationId, audioBuffer)
+            } catch (error) {
+              console.error('Error decoding audio:', error)
+            }
+          }
+
+          playAudioChunks()
+        }
+      }
+    }
+  }, [events])
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100">
@@ -135,7 +239,7 @@ function App() {
                 </div>
 
                 {activeTab === 'transcript' ? (
-                  <EventsDisplay events={events} />
+                  <EventsDisplay events={events} onPlayAudio={handlePlayAudio} />
                 ) : (
                   <TelemetryDashboard metrics={metrics} />
                 )}

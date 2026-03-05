@@ -2,9 +2,10 @@ import type { PipelineEvent } from '../types'
 
 interface EventsDisplayProps {
   events: PipelineEvent[]
+  onPlayAudio?: (correlationId: string) => void
 }
 
-export function EventsDisplay({ events }: EventsDisplayProps) {
+export function EventsDisplay({ events, onPlayAudio }: EventsDisplayProps) {
   const getEventColor = (eventType: string) => {
     switch (eventType) {
       case 'speech_started':
@@ -45,6 +46,14 @@ export function EventsDisplay({ events }: EventsDisplayProps) {
 
   const extractText = (event: PipelineEvent): string => {
     const payload = event.payload as any
+    
+    // Handle TTS audio chunks - show size instead of base64
+    if (event.event_type === 'tts_audio_chunk') {
+      const bytes = payload.audio_b64 ? Math.ceil(payload.audio_b64.length * 0.75) : 0
+      const isLast = payload.is_last ? ' (final)' : ''
+      return `Audio chunk: ${bytes} bytes${isLast}`
+    }
+    
     if (payload.text) return payload.text
     if (payload.token) return payload.token
     if (payload.accumulated_text) return payload.accumulated_text
@@ -74,7 +83,17 @@ export function EventsDisplay({ events }: EventsDisplayProps) {
                       {new Date(event.timestamp).toLocaleTimeString()}
                     </span>
                   </div>
-                  <p className="text-sm mt-1 break-words whitespace-pre-wrap">{extractText(event)}</p>
+                  <div className="flex items-center justify-between gap-2 mt-1">
+                    <p className="text-sm break-words whitespace-pre-wrap">{extractText(event)}</p>
+                    {event.event_type === 'tts_audio_chunk' && onPlayAudio && (
+                      <button
+                        onClick={() => onPlayAudio(event.correlation_id)}
+                        className="px-2 py-1 text-xs bg-cyan-600 hover:bg-cyan-500 rounded transition whitespace-nowrap"
+                      >
+                        ▶ Play
+                      </button>
+                    )}
+                  </div>
                   <p className="text-xs text-slate-400 mt-2 opacity-60 font-mono">
                     {event.correlation_id}
                   </p>
