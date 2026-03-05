@@ -1,5 +1,28 @@
 import { jsx as _jsx, jsxs as _jsxs } from "react/jsx-runtime";
 export function EventsDisplay({ events, onPlayAudio }) {
+    // Group TTS chunks by correlation_id - consolidate all chunks into 1 event per response
+    const getConsolidatedEvents = () => {
+        const consolidatedMap = new Map();
+        const orderedEvents = [];
+        for (const event of events) {
+            if (event.event_type === 'tts_audio_chunk') {
+                // Group TTS chunks by correlation_id
+                if (!consolidatedMap.has(event.correlation_id)) {
+                    consolidatedMap.set(event.correlation_id, []);
+                    orderedEvents.push({
+                        type: 'consolidated',
+                        correlationId: event.correlation_id,
+                        events: consolidatedMap.get(event.correlation_id),
+                    });
+                }
+                consolidatedMap.get(event.correlation_id).push(event);
+            }
+            else {
+                orderedEvents.push(event);
+            }
+        }
+        return orderedEvents;
+    };
     const getEventColor = (eventType) => {
         switch (eventType) {
             case 'speech_started':
@@ -54,5 +77,20 @@ export function EventsDisplay({ events, onPlayAudio }) {
             return payload.message;
         return JSON.stringify(payload);
     };
-    return (_jsx("div", { className: "bg-slate-800 border border-slate-700 rounded-lg p-6", children: _jsx("div", { className: "max-h-96 overflow-y-auto space-y-3", children: events.length === 0 ? (_jsx("div", { className: "text-center py-12 text-slate-400", children: _jsx("p", { children: "No events yet. Start recording to see real-time events..." }) })) : (events.map((event, idx) => (_jsx("div", { className: `rounded border p-3 fade-in ${getEventColor(event.event_type)}`, children: _jsxs("div", { className: "flex items-start gap-3", children: [_jsx("span", { className: "text-xl", children: getEventEmoji(event.event_type) }), _jsxs("div", { className: "flex-1 min-w-0", children: [_jsxs("div", { className: "flex items-center justify-between gap-2", children: [_jsx("h3", { className: "font-semibold text-sm", children: event.event_type.replace(/_/g, ' ') }), _jsx("span", { className: "text-xs text-slate-300 opacity-70", children: new Date(event.timestamp).toLocaleTimeString() })] }), _jsxs("div", { className: "flex items-center justify-between gap-2 mt-1", children: [_jsx("p", { className: "text-sm break-words whitespace-pre-wrap", children: extractText(event) }), event.event_type === 'tts_audio_chunk' && onPlayAudio && (_jsx("button", { onClick: () => onPlayAudio(event.correlation_id), className: "px-2 py-1 text-xs bg-cyan-600 hover:bg-cyan-500 rounded transition whitespace-nowrap", children: "\u25B6 Play" }))] }), _jsx("p", { className: "text-xs text-slate-400 mt-2 opacity-60 font-mono", children: event.correlation_id })] })] }) }, `${event.correlation_id}-${idx}`)))) }) }));
+    const consolidatedEvents = getConsolidatedEvents();
+    return (_jsx("div", { className: "bg-slate-800 border border-slate-700 rounded-lg p-6", children: _jsx("div", { className: "max-h-96 overflow-y-auto space-y-3", children: consolidatedEvents.length === 0 ? (_jsx("div", { className: "text-center py-12 text-slate-400", children: _jsx("p", { children: "No events yet. Start recording to see real-time events..." }) })) : (consolidatedEvents.map((item, idx) => {
+                // Handle consolidated TTS chunks
+                const isConsolidated = 'type' in item && item.type === 'consolidated';
+                if (isConsolidated) {
+                    const event = item.events[0]; // Use first event for timestamp
+                    const totalBytes = item.events.reduce((sum, e) => {
+                        const payload = e.payload;
+                        return sum + (payload.audio_b64 ? Math.ceil(payload.audio_b64.length * 0.75) : 0);
+                    }, 0);
+                    return (_jsx("div", { className: `rounded border p-3 fade-in ${getEventColor('tts_audio_chunk')}`, children: _jsxs("div", { className: "flex items-start gap-3", children: [_jsx("span", { className: "text-xl", children: getEventEmoji('tts_audio_chunk') }), _jsxs("div", { className: "flex-1 min-w-0", children: [_jsxs("div", { className: "flex items-center justify-between gap-2", children: [_jsxs("h3", { className: "font-semibold text-sm", children: ["TTS audio response (", item.events.length, " chunks)"] }), _jsx("span", { className: "text-xs text-slate-300 opacity-70", children: new Date(event.timestamp).toLocaleTimeString() })] }), _jsxs("div", { className: "flex items-center justify-between gap-2 mt-1", children: [_jsxs("p", { className: "text-sm break-words whitespace-pre-wrap", children: ["Audio: ", totalBytes, " bytes"] }), onPlayAudio && (_jsx("button", { onClick: () => onPlayAudio(item.correlationId), className: "px-2 py-1 text-xs bg-cyan-600 hover:bg-cyan-500 rounded transition whitespace-nowrap", children: "\u25B6 Play" }))] }), _jsx("p", { className: "text-xs text-slate-400 mt-2 opacity-60 font-mono", children: item.correlationId })] })] }) }, `consolidated-${item.correlationId}-${idx}`));
+                }
+                // Handle regular events
+                const event = item;
+                return (_jsx("div", { className: `rounded border p-3 fade-in ${getEventColor(event.event_type)}`, children: _jsxs("div", { className: "flex items-start gap-3", children: [_jsx("span", { className: "text-xl", children: getEventEmoji(event.event_type) }), _jsxs("div", { className: "flex-1 min-w-0", children: [_jsxs("div", { className: "flex items-center justify-between gap-2", children: [_jsx("h3", { className: "font-semibold text-sm", children: event.event_type.replace(/_/g, ' ') }), _jsx("span", { className: "text-xs text-slate-300 opacity-70", children: new Date(event.timestamp).toLocaleTimeString() })] }), _jsx("div", { className: "flex items-center justify-between gap-2 mt-1", children: _jsx("p", { className: "text-sm break-words whitespace-pre-wrap", children: extractText(event) }) }), _jsx("p", { className: "text-xs text-slate-400 mt-2 opacity-60 font-mono", children: event.correlation_id })] })] }) }, `${event.correlation_id}-${idx}`));
+            })) }) }));
 }

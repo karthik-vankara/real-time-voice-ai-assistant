@@ -32,9 +32,9 @@ async def synthesize_stream(
     """
     provider_url = provider_url or config.provider.tts_url
     payload = {
-        "model": "tts-1",
+        "model": "tts-1-hd",  # High-quality model for better audio clarity
         "input": text,
-        "voice": "alloy",
+        "voice": "nova",  # Better voice quality than 'alloy'
     }
     timeout = httpx.Timeout(
         connect=config.service_timeout.connect_timeout,

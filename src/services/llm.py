@@ -29,11 +29,17 @@ async def generate_response_stream(
     data: {"choices":[{"delta":{"content":"token"}}]}
     """
     provider_url = provider_url or config.provider.llm_url
-    messages = [*context, {"role": "user", "content": user_text}]
+    # Add system prompt to guide LLM responses
+    system_message = {
+        "role": "system",
+        "content": "You are a helpful voice assistant. Keep responses concise (1-3 sentences) and clear for text-to-speech conversion. Avoid lists and technical jargon.",
+    }
+    messages = [system_message, *context, {"role": "user", "content": user_text}]
     payload = {
         "model": "gpt-3.5-turbo",
         "messages": messages,
         "stream": True,
+        "temperature": 0.7,
     }
 
     timeout = httpx.Timeout(
