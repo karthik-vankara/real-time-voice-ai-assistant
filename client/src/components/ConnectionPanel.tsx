@@ -37,8 +37,12 @@ export function ConnectionPanel({ ws, isConnected }: ConnectionPanelProps) {
               }
               // Remove trailing slash
               httpBase = httpBase.replace(/\/$/, '')
-              // Convert to WebSocket URL
-              return httpBase.replace(/^https?/, 'ws') + '/ws'
+              // Convert to secure WebSocket URL (https -> wss, http -> ws)
+              if (httpBase.startsWith('https://')) {
+                return 'wss://' + httpBase.slice(8) + '/ws'
+              } else {
+                return 'ws://' + httpBase.slice(7) + '/ws'
+              }
             })()}
           </p>
         </div>

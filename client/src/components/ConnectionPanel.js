@@ -23,8 +23,13 @@ export function ConnectionPanel({ ws, isConnected }) {
                                     }
                                     // Remove trailing slash
                                     httpBase = httpBase.replace(/\/$/, '');
-                                    // Convert to WebSocket URL
-                                    return httpBase.replace(/^https?/, 'ws') + '/ws';
+                                    // Convert to secure WebSocket URL (https -> wss, http -> ws)
+                                    if (httpBase.startsWith('https://')) {
+                                        return 'wss://' + httpBase.slice(8) + '/ws';
+                                    }
+                                    else {
+                                        return 'ws://' + httpBase.slice(7) + '/ws';
+                                    }
                                 })() })] }), _jsxs("div", { className: "flex gap-2", children: [_jsx("button", { onClick: handleConnect, disabled: isConnected, className: `flex-1 px-4 py-2 rounded font-medium transition ${isConnected
                                     ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
                                     : 'bg-blue-600 hover:bg-blue-700 text-white'}`, children: isConnected ? '✓ Connected' : 'Connect' }), _jsx("button", { onClick: handleDisconnect, disabled: !isConnected, className: `flex-1 px-4 py-2 rounded font-medium transition ${!isConnected

@@ -66,8 +66,13 @@ function App() {
     // Remove trailing slash if present
     httpBase = httpBase.replace(/\/$/, '')
     
-    // Convert http(s) to ws(s)
-    const wsUrl = httpBase.replace(/^https?/, 'ws') + '/ws'
+    // Convert http(s) to ws(s) - preserve security protocol
+    let wsUrl: string
+    if (httpBase.startsWith('https://')) {
+      wsUrl = 'wss://' + httpBase.slice(8) + '/ws'  // Remove 'https://', add 'wss://'
+    } else {
+      wsUrl = 'ws://' + httpBase.slice(7) + '/ws'   // Remove 'http://', add 'ws://'
+    }
     console.log(`[WS] Connecting to: ${wsUrl}`)
     return wsUrl
   }
