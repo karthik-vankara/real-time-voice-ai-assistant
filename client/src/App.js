@@ -41,10 +41,23 @@ function App() {
             console.error('Error playing audio:', error);
         }
     };
+    // Helper function to build secure WebSocket URL
+    const getWebSocketUrl = () => {
+        let httpBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+        // Ensure protocol is specified (handle case where only domain is provided)
+        if (!httpBase.startsWith('http://') && !httpBase.startsWith('https://')) {
+            httpBase = 'https://' + httpBase;
+        }
+        // Remove trailing slash if present
+        httpBase = httpBase.replace(/\/$/, '');
+        // Convert http(s) to ws(s)
+        const wsUrl = httpBase.replace(/^https?/, 'ws') + '/ws';
+        console.log(`[WS] Connecting to: ${wsUrl}`);
+        return wsUrl;
+    };
     useEffect(() => {
         // Build WebSocket URL from HTTP base URL
-        const httpBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-        const wsUrl = httpBase.replace(/^https?/, 'ws') + '/ws';
+        const wsUrl = getWebSocketUrl();
         const client = new WebSocketClient(wsUrl, {
             onConnect: () => {
                 setIsConnected(true);
@@ -106,7 +119,13 @@ function App() {
     useEffect(() => {
         const fetchMetrics = async () => {
             try {
-                const httpBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+                let httpBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+                // Ensure protocol is specified
+                if (!httpBase.startsWith('http://') && !httpBase.startsWith('https://')) {
+                    httpBase = 'https://' + httpBase;
+                }
+                // Remove trailing slash
+                httpBase = httpBase.replace(/\/$/, '');
                 const response = await fetch(`${httpBase}/telemetry/latency`);
                 if (response.ok) {
                     const data = await response.json();

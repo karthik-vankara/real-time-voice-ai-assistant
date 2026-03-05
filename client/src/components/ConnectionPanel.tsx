@@ -30,7 +30,14 @@ export function ConnectionPanel({ ws, isConnected }: ConnectionPanelProps) {
           <label className="text-sm text-slate-400">Server URL</label>
           <p className="text-sm font-mono bg-slate-900 p-2 rounded mt-1 break-all">
             {(() => {
-              const httpBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+              let httpBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+              // Ensure protocol is specified
+              if (!httpBase.startsWith('http://') && !httpBase.startsWith('https://')) {
+                httpBase = 'https://' + httpBase
+              }
+              // Remove trailing slash
+              httpBase = httpBase.replace(/\/$/, '')
+              // Convert to WebSocket URL
               return httpBase.replace(/^https?/, 'ws') + '/ws'
             })()}
           </p>

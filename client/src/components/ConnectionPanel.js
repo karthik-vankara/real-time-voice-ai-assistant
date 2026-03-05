@@ -16,7 +16,14 @@ export function ConnectionPanel({ ws, isConnected }) {
         }
     };
     return (_jsxs("div", { className: "bg-slate-800 border border-slate-700 rounded-lg p-6", children: [_jsx("h2", { className: "text-lg font-semibold mb-4", children: "Connection" }), _jsxs("div", { className: "space-y-3", children: [_jsxs("div", { children: [_jsx("label", { className: "text-sm text-slate-400", children: "Server URL" }), _jsx("p", { className: "text-sm font-mono bg-slate-900 p-2 rounded mt-1 break-all", children: (() => {
-                                    const httpBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+                                    let httpBase = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
+                                    // Ensure protocol is specified
+                                    if (!httpBase.startsWith('http://') && !httpBase.startsWith('https://')) {
+                                        httpBase = 'https://' + httpBase;
+                                    }
+                                    // Remove trailing slash
+                                    httpBase = httpBase.replace(/\/$/, '');
+                                    // Convert to WebSocket URL
                                     return httpBase.replace(/^https?/, 'ws') + '/ws';
                                 })() })] }), _jsxs("div", { className: "flex gap-2", children: [_jsx("button", { onClick: handleConnect, disabled: isConnected, className: `flex-1 px-4 py-2 rounded font-medium transition ${isConnected
                                     ? 'bg-slate-700 text-slate-400 cursor-not-allowed'
