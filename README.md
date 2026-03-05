@@ -1,5 +1,27 @@
 # Real-Time AI Voice Assistant — Technical Report
 
+## 🚀 Live Demo (Production)
+
+**Try it now!** The application is deployed and live:
+
+- **Frontend UI:** https://real-time-voice-ai-assistant.vercel.app/
+- **Backend API:** https://real-time-voice-ai-assistant-production.up.railway.app/health
+
+### How to Use the Live Demo
+
+1. Open the [frontend URL](https://real-time-voice-ai-assistant.vercel.app/)
+2. Click **"Connect to Server"** to establish connection
+3. Click **"Start Recording"** and speak your query
+4. Watch as the system:
+   - Transcribes your speech (ASR - Whisper)
+   - Generates an AI response (LLM - GPT-3.5-turbo)
+   - Converts text to speech (TTS - OpenAI tts-1-hd)
+   - Plays the audio response automatically
+
+**Technology Stack:** React 18.2 (Vercel) + FastAPI (Railway) + OpenAI APIs
+
+---
+
 ## System Architecture
 
 ```
