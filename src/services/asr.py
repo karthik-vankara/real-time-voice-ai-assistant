@@ -87,7 +87,19 @@ async def transcribe_stream(
         async for chunk in audio_chunks:
             audio_data += chunk
         
+        # Calculate expected duration at 16kHz, 16-bit PCM (2 bytes per sample)
+        bytes_per_sample = 2  # 16-bit
+        num_samples = len(audio_data) // bytes_per_sample
+        duration_seconds = num_samples / 16000
+        
+        logger.info(
+            f"ASR received {len(audio_data)} bytes ({num_samples} samples, {duration_seconds:.2f}s at 16kHz)",
+            correlation_id=correlation_id,
+            pipeline_stage="asr",
+        )
+        
         # Convert raw PCM to WAV format (Whisper requires valid audio file)
+        # Assuming 16kHz, mono, 16-bit (already downsampled on client)
         wav_data = _pcm_to_wav(audio_data, sample_rate=16000, channels=1, bit_depth=16)
         
         # Prepare headers
@@ -99,6 +111,7 @@ async def transcribe_stream(
         files = {
             "file": ("audio.wav", wav_data, "audio/wav"),
             "model": (None, "whisper-1"),
+            "language": (None, "en"),  # Force English to prevent language misdetection
         }
         
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -110,6 +123,13 @@ async def transcribe_stream(
             response.raise_for_status()
             data = response.json()
             text: str = data.get("text", "")
+            language: str = data.get("language", "unknown")
+            
+            logger.info(
+                f"Whisper transcription: text='{text}', language={language}",
+                correlation_id=correlation_id,
+                pipeline_stage="asr",
+            )
             
             # Emit transcription as final
             yield TranscriptionFinalEvent(
@@ -168,6 +188,7 @@ async def transcribe_audio(
         files = {
             "file": ("audio.wav", wav_data, "audio/wav"),
             "model": (None, "whisper-1"),
+            "language": (None, "en"),  # Force English to prevent language misdetection
         }
         
         async with httpx.AsyncClient(timeout=timeout) as client:

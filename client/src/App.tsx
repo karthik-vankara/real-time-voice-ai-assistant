@@ -25,7 +25,7 @@ function App() {
   })
   const [activeTab, setActiveTab] = useState<'transcript' | 'metrics'>('transcript')
   const audioContextRef = useRef<AudioContext | null>(null)
-  const ttsChunksRef = useRef<Map<string, { chunks: Map<number, string>; isComplete: boolean; maxIndex: number }>>(new Map())
+  const ttsChunksRef = useRef<Map<string, { chunks: Map<number, string>; isComplete: boolean; maxIndex: number; gotFinalFlag?: boolean; expectedFinalIndex?: number }>>(new Map())
   const audioBuffersRef = useRef<Map<string, AudioBuffer>>(new Map())
 
   const handlePlayAudio = (correlationId: string) => {
@@ -69,6 +69,24 @@ function App() {
           setIsConnected(false)
         },
         onMessage: (event) => {
+          // Log important events for debugging
+          if (event.event_type === 'transcription_final') {
+            const payload = event.payload as any
+            console.log('[ASR RESULT]', payload.text, event.correlation_id)
+          } else if (event.event_type === 'llm_token') {
+            const payload = event.payload as any
+            console.log('[LLM TOKEN]', {
+              token: payload.token,
+              accumulated: payload.accumulated_text,
+            })
+          } else if (event.event_type === 'tts_audio_chunk') {
+            const payload = event.payload as any
+            console.log('[TTS CHUNK]', {
+              index: payload.chunk_index,
+              is_last: payload.is_last,
+              size: Math.ceil(payload.audio_b64.length * 0.75),
+            })
+          }
           setEvents((prev) => {
             const updated = [event, ...prev]
             return updated.slice(0, 100) // Keep last 100 events
@@ -139,7 +157,13 @@ function App() {
         const correlationId = event.correlation_id
 
         if (!ttsChunksRef.current.has(correlationId)) {
-          ttsChunksRef.current.set(correlationId, { chunks: new Map(), isComplete: false, maxIndex: 0 })
+          ttsChunksRef.current.set(correlationId, {
+            chunks: new Map(),
+            isComplete: false,
+            maxIndex: 0,
+            gotFinalFlag: false,
+            expectedFinalIndex: undefined,
+          })
         }
 
         const session = ttsChunksRef.current.get(correlationId)!
@@ -150,62 +174,98 @@ function App() {
           session.maxIndex = Math.max(session.maxIndex, chunk_index)
         }
 
-        // When we get the final chunk, decode all accumulated chunks in order
+        // When we get the final chunk, mark that we got is_last but DON'T decode yet
         if (!session.isComplete && is_last) {
-          session.isComplete = true
+          console.log(
+            `[TTS FINAL CHUNK] Got is_last flag at chunk ${chunk_index}. Stored so far: ${session.chunks.size}`,
+          )
+          session.expectedFinalIndex = chunk_index
+          session.gotFinalFlag = true
+        }
 
-          // Decode and store audio
-          const playAudioChunks = async () => {
-            try {
-              const audioCtx = audioContextRef.current
-              if (!audioCtx) {
-                console.error('Audio context not initialized')
-                return
-              }
+        // Check if we have all chunks (0 to expectedFinalIndex)
+        if (session.gotFinalFlag && !session.isComplete) {
+          const expectedCount = session.expectedFinalIndex! + 1
+          const actualCount = session.chunks.size
 
-              // Reconstruct audio in proper order using chunk indices
-              const allBytes: number[] = []
-              for (let i = 0; i <= session.maxIndex; i++) {
-                const b64 = session.chunks.get(i)
-                if (!b64) {
-                  console.warn(`Missing chunk at index ${i} for correlation ${correlationId}`)
-                  continue
-                }
-                const binaryString = atob(b64)
-                for (let j = 0; j < binaryString.length; j++) {
-                  allBytes.push(binaryString.charCodeAt(j))
-                }
-              }
-
-              if (allBytes.length === 0) {
-                console.error('No audio data to decode')
-                return
-              }
-
-              // Convert to ArrayBuffer
-              const binaryData = new Uint8Array(allBytes)
-              const arrayBuffer = binaryData.buffer
-
-              // Use Web Audio API to decode the audio (handles MP3, AAC, etc.)
-              audioCtx.decodeAudioData(
-                arrayBuffer.slice(0), // Copy to ensure clean buffer
-                (decodedBuffer) => {
-                  // Store the decoded AudioBuffer for manual playback
-                  audioBuffersRef.current.set(correlationId, decodedBuffer)
-                  console.log(
-                    `Audio decoded successfully for ${correlationId}: ${session.chunks.size} chunks, ${(arrayBuffer.byteLength / 1024).toFixed(1)}KB`,
-                  )
-                },
-                (error) => {
-                  console.error(`Error decoding audio for ${correlationId}:`, error)
-                },
-              )
-            } catch (error) {
-              console.error('Error processing audio chunks:', error)
+          // Check which chunks are missing
+          const missingChunks: number[] = []
+          for (let i = 0; i <= session.expectedFinalIndex!; i++) {
+            if (!session.chunks.has(i)) {
+              missingChunks.push(i)
             }
           }
 
-          playAudioChunks()
+          if (missingChunks.length === 0) {
+            // All chunks arrived! Now we can decode
+            session.isComplete = true
+            console.log(
+              `[TTS READY] All ${actualCount} chunks received (0-${session.expectedFinalIndex}). Starting decode...`,
+            )
+
+            // Decode and store audio
+            const decodeAudio = async () => {
+              try {
+                const audioCtx = audioContextRef.current
+                if (!audioCtx) {
+                  console.error('Audio context not initialized')
+                  return
+                }
+
+                // Give a small delay to ensure all chunks are truly in place
+                await new Promise((resolve) => setTimeout(resolve, 50))
+
+                // Reconstruct audio in proper order using chunk indices
+                const allBytes: number[] = []
+                for (let i = 0; i <= session.expectedFinalIndex!; i++) {
+                  const b64 = session.chunks.get(i)
+                  if (!b64) {
+                    console.warn(`Missing chunk at index ${i}`)
+                    continue
+                  }
+                  const binaryString = atob(b64)
+                  for (let j = 0; j < binaryString.length; j++) {
+                    allBytes.push(binaryString.charCodeAt(j))
+                  }
+                }
+
+                if (allBytes.length === 0) {
+                  console.error('No audio data to decode')
+                  return
+                }
+
+                console.log(
+                  `[TTS DECODED] Total audio data: ${allBytes.length} bytes, from ${session.chunks.size} chunks`,
+                )
+
+                // Convert to ArrayBuffer
+                const binaryData = new Uint8Array(allBytes)
+                const arrayBuffer = binaryData.buffer
+
+                // Use Web Audio API to decode the audio (handles MP3, AAC, etc.)
+                audioCtx.decodeAudioData(
+                  arrayBuffer.slice(0),
+                  (decodedBuffer) => {
+                    audioBuffersRef.current.set(correlationId, decodedBuffer)
+                    console.log(
+                      `Audio decoded successfully for ${correlationId}: ${session.chunks.size} chunks, ${(arrayBuffer.byteLength / 1024).toFixed(1)}KB`,
+                    )
+                  },
+                  (error) => {
+                    console.error(`Error decoding audio for ${correlationId}:`, error)
+                  },
+                )
+              } catch (error) {
+                console.error('Error processing audio chunks:', error)
+              }
+            }
+
+            decodeAudio()
+          } else {
+            console.log(
+              `⏳ Waiting for chunks... Have ${actualCount}/${expectedCount}. Missing: [${missingChunks.join(', ')}]`,
+            )
+          }
         }
       }
     }

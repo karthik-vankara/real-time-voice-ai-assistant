@@ -26,11 +26,22 @@ async def synthesize_stream(
     """Stream audio chunks from the TTS provider (OpenAI format).
 
     OpenAI TTS API:
-    - POST JSON body: {"model": "tts-1", "input": "text", "voice": "alloy"}
-    - Response: Binary audio (MP3 or ACC format)
+    - POST JSON body: {"model": "tts-1-hd", "input": "text", "voice": "nova"}
+    - Response: Binary audio (MP3 or AAC format)
     - We chunk the binary and encode to base64 for streaming to client
+    - Max input: 4096 characters (enforce limit)
     """
     provider_url = provider_url or config.provider.tts_url
+    
+    # Enforce OpenAI TTS 4096 character limit
+    if len(text) > 4096:
+        logger.warning(
+            f"TTS text exceeds 4096 chars ({len(text)}), truncating",
+            correlation_id=correlation_id,
+            pipeline_stage="tts",
+        )
+        text = text[:4096] + "..."
+    
     payload = {
         "model": "tts-1-hd",  # High-quality model for better audio clarity
         "input": text,

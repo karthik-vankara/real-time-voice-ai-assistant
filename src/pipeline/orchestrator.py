@@ -305,6 +305,11 @@ async def _run_asr(
 
     try:
         final_text = await _asr_cb.call(_asr_call)
+        logger.info(
+            f"✅ ASR RESULT: text='{final_text}'",
+            correlation_id=correlation_id,
+            pipeline_stage="orchestrator",
+        )
     except (CircuitOpenError, Exception) as exc:
         logger.warning(
             f"ASR degraded: {exc}",
@@ -329,6 +334,11 @@ async def _run_llm(
     correlation_id: str,
 ) -> str:
     """Run LLM through circuit breaker; on failure emit bridge audio (T025)."""
+    logger.info(
+        f"Starting LLM with user_text: '{user_text}' (len={len(user_text)})",
+        correlation_id=correlation_id,
+        pipeline_stage="orchestrator",
+    )
     llm_text = ""
 
     async def _llm_call() -> str:
@@ -345,6 +355,11 @@ async def _run_llm(
 
     try:
         llm_text = await _llm_cb.call(_llm_call)
+        logger.info(
+            f"✅ LLM RESPONSE: text='{llm_text}'",
+            correlation_id=correlation_id,
+            pipeline_stage="orchestrator",
+        )
     except (CircuitOpenError, Exception) as exc:
         logger.warning(
             f"LLM degraded: {exc}",
@@ -367,12 +382,22 @@ async def _run_tts(
     correlation_id: str,
 ) -> None:
     """Run TTS through circuit breaker; on failure serve cached clip (T026)."""
+    logger.info(
+        f"🔊 TTS INPUT: text='{text}' (len={len(text)})",
+        correlation_id=correlation_id,
+        pipeline_stage="orchestrator",
+    )
 
     async def _tts_call() -> None:
         async for audio_event in tts.synthesize_stream(
             text, correlation_id=correlation_id
         ):
             await ws.send_json(audio_event.model_dump(mode="json"))
+        logger.info(
+            f"🎵 TTS AUDIO SENT: {text[:50]}... converted to audio chunks",
+            correlation_id=correlation_id,
+            pipeline_stage="orchestrator",
+        )
 
     try:
         await _tts_cb.call(_tts_call)

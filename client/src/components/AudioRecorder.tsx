@@ -13,37 +13,54 @@ export function AudioRecorder({ ws }: AudioRecorderProps) {
   const streamRef = useRef<MediaStream | null>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  // Downsample audio from 48kHz to 16kHz (3:1 ratio)
+  const downsample = (input: Float32Array, ratio: number): Float32Array => {
+    if (ratio === 1) {
+      return input
+    }
+
+    // Use simple decimation: take every nth sample
+    const outputLength = Math.floor(input.length / ratio)
+    const output = new Float32Array(outputLength)
+
+    for (let i = 0; i < outputLength; i++) {
+      output[i] = input[i * ratio]
+    }
+
+    return output
+  }
+
   // Convert float32 audio to 16-bit PCM
   const floatTo16BitPCM = (floats: Float32Array): Uint8Array => {
     // Log input properties
     console.log(`📊 Input floats: length=${floats.length}, byteLength=${floats.byteLength}`)
-    
+
     // Ensure we have even number of samples (should always be 4096)
     const numSamples = floats.length
-    
+
     // Create Int16Array - this will have numSamples elements, each 2 bytes
     const pcm = new Int16Array(numSamples)
     for (let i = 0; i < numSamples; i++) {
       const s = Math.max(-1, Math.min(1, floats[i]))
       pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff
     }
-    
+
     console.log(`📊 Int16Array created: length=${pcm.length}, byteLength=${pcm.byteLength}`)
-    
+
     // Create Uint8Array view from the ArrayBuffer
     // This should always be numSamples * 2 bytes (even)
     const uint8Data = new Uint8Array(pcm.buffer)
     const expectedBytes = numSamples * 2
     const actualBytes = uint8Data.byteLength
-    
+
     console.log(`📊 Uint8Array created: byteLength=${actualBytes} (expected ${expectedBytes})`)
     console.log(`✅ Status: ${actualBytes % 2 === 0 ? 'EVEN (valid)' : 'ODD (invalid)'}`)
-    
+
     if (actualBytes !== expectedBytes) {
       console.error(`❌ Length mismatch! Expected ${expectedBytes}, got ${actualBytes}`)
       throw new Error(`PCM encoding: byte length mismatch (expected ${expectedBytes}, got ${actualBytes})`)
     }
-    
+
     if (actualBytes % 2 !== 0) {
       console.error(`❌ CRITICAL: ODD byte length ${actualBytes}!`)
       throw new Error(`PCM encoding produced ODD-length data: ${actualBytes} bytes`)
@@ -69,14 +86,24 @@ export function AudioRecorder({ ws }: AudioRecorderProps) {
       const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)()
       audioContextRef.current = audioContext
 
+      console.log(`🎤 Recording started - AudioContext sampleRate: ${audioContext.sampleRate}Hz`)
+
       const source = audioContext.createMediaStreamSource(stream)
 
       // Create ScriptProcessor for raw audio chunks
       const processor = audioContext.createScriptProcessor(4096, 1, 1)
+      
+      // Calculate downsample ratio to convert from actual sample rate to 16kHz
+      const downsampleRatio = audioContext.sampleRate / 16000
 
       processor.onaudioprocess = (event) => {
         const inputData = event.inputBuffer.getChannelData(0)
-        const pcmData = floatTo16BitPCM(inputData)
+        
+        // Downsample from actual sample rate (e.g., 48kHz) to 16kHz
+        const downsampled = downsample(inputData, downsampleRatio)
+
+        // Convert downsampled float32 to 16-bit PCM
+        const pcmData = floatTo16BitPCM(downsampled)
 
         if (ws?.isConnected()) {
           ws.sendAudio(pcmData)

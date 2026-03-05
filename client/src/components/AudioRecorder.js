@@ -7,6 +7,19 @@ export function AudioRecorder({ ws }) {
     const processorRef = useRef(null);
     const streamRef = useRef(null);
     const timerRef = useRef(null);
+    // Downsample audio from 48kHz to 16kHz (3:1 ratio)
+    const downsample = (input, ratio) => {
+        if (ratio === 1) {
+            return input;
+        }
+        // Use simple decimation: take every nth sample
+        const outputLength = Math.floor(input.length / ratio);
+        const output = new Float32Array(outputLength);
+        for (let i = 0; i < outputLength; i++) {
+            output[i] = input[i * ratio];
+        }
+        return output;
+    };
     // Convert float32 audio to 16-bit PCM
     const floatTo16BitPCM = (floats) => {
         // Log input properties
@@ -51,12 +64,18 @@ export function AudioRecorder({ ws }) {
             // Create Web Audio API context
             const audioContext = new (window.AudioContext || window.webkitAudioContext)();
             audioContextRef.current = audioContext;
+            console.log(`🎤 Recording started - AudioContext sampleRate: ${audioContext.sampleRate}Hz`);
             const source = audioContext.createMediaStreamSource(stream);
             // Create ScriptProcessor for raw audio chunks
             const processor = audioContext.createScriptProcessor(4096, 1, 1);
+            // Calculate downsample ratio to convert from actual sample rate to 16kHz
+            const downsampleRatio = audioContext.sampleRate / 16000;
             processor.onaudioprocess = (event) => {
                 const inputData = event.inputBuffer.getChannelData(0);
-                const pcmData = floatTo16BitPCM(inputData);
+                // Downsample from actual sample rate (e.g., 48kHz) to 16kHz
+                const downsampled = downsample(inputData, downsampleRatio);
+                // Convert downsampled float32 to 16-bit PCM
+                const pcmData = floatTo16BitPCM(downsampled);
                 if (ws?.isConnected()) {
                     ws.sendAudio(pcmData);
                 }
