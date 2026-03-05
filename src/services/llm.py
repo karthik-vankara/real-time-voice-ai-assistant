@@ -23,15 +23,18 @@ async def generate_response_stream(
     correlation_id: str,
     provider_url: str | None = None,
 ) -> AsyncIterator[LLMTokenEvent]:
-    """Stream tokens from the LLM provider.
+    """Stream tokens from the LLM provider (OpenAI Chat API format).
 
-    Protocol contract:
-    - POST JSON body: ``{"messages": [...], "stream": true}``
-    - Response: newline-delimited JSON with ``{"token": str, "done": bool}``
+    OpenAI returns Server-Sent Events (SSE):
+    data: {"choices":[{"delta":{"content":"token"}}]}
     """
     provider_url = provider_url or config.provider.llm_url
     messages = [*context, {"role": "user", "content": user_text}]
-    payload = {"messages": messages, "stream": True}
+    payload = {
+        "model": "gpt-3.5-turbo",
+        "messages": messages,
+        "stream": True,
+    }
 
     timeout = httpx.Timeout(
         connect=config.service_timeout.connect_timeout,
@@ -54,20 +57,34 @@ async def generate_response_stream(
             response.raise_for_status()
             accumulated = ""
             async for line in response.aiter_lines():
-                if not line.strip():
+                if not line.strip() or not line.startswith("data: "):
                     continue
-                data = json.loads(line)
-                token: str = data.get("token", "")
-                accumulated += token
-                yield LLMTokenEvent(
-                    correlation_id=correlation_id,
-                    payload=LLMTokenPayload(
-                        token=token,
-                        accumulated_text=accumulated,
-                    ),
-                )
-                if data.get("done", False):
-                    break
+                
+                # Parse SSE format: "data: {...}"
+                try:
+                    data_str = line[6:]  # Remove "data: " prefix
+                    if data_str == "[DONE]":
+                        break
+                    
+                    data = json.loads(data_str)
+                    choices = data.get("choices", [])
+                    if not choices:
+                        continue
+                    
+                    delta = choices[0].get("delta", {})
+                    token: str = delta.get("content", "")
+                    
+                    if token:
+                        accumulated += token
+                        yield LLMTokenEvent(
+                            correlation_id=correlation_id,
+                            payload=LLMTokenPayload(
+                                token=token,
+                                accumulated_text=accumulated,
+                            ),
+                        )
+                except json.JSONDecodeError:
+                    continue
     except httpx.TimeoutException:
         logger.error(
             "LLM provider timeout",

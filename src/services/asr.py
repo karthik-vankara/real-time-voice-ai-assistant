@@ -1,8 +1,8 @@
 """ASR service adapter — async streaming interface (FR-001, FR-002).
 
 Accepts audio chunks, yields transcription events.  The adapter
-communicates with an external ASR provider via HTTP streaming (httpx).
-Provider URL is configurable.
+communicates with an external ASR provider via HTTP.
+Provider URL is configurable. For OpenAI Whisper, sends multipart/form-data.
 
 In Phase 4 (US2) this adapter is extended to emit provisional events.
 In Phase 5 (US3) calls are wrapped with a circuit breaker.
@@ -11,6 +11,7 @@ In Phase 5 (US3) calls are wrapped with a circuit breaker.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator  # noqa: TC003
+import json
 
 import httpx
 
@@ -32,13 +33,8 @@ async def transcribe_stream(
 ) -> AsyncIterator[TranscriptionFinalEvent | TranscriptionProvisionalEvent]:
     """Stream audio chunks to the ASR provider and yield transcription events.
 
-    The function acts as an async generator — callers iterate to receive
-    events as they arrive from the provider.
-
-    Protocol contract with the ASR provider:
-    - POST streaming body (chunked transfer)
-    - Response: newline-delimited JSON objects with keys:
-      ``{"text": str, "is_final": bool}``
+    For OpenAI Whisper: collects all chunks, sends as multipart/form-data.
+    Response: JSON with {"text": str}
     """
     provider_url = provider_url or config.provider.asr_url
     timeout = httpx.Timeout(
@@ -49,36 +45,37 @@ async def transcribe_stream(
     )
 
     try:
-        headers = {"Content-Type": "application/octet-stream"}
+        # Collect all audio chunks
+        audio_data = b""
+        async for chunk in audio_chunks:
+            audio_data += chunk
+        
+        # Prepare headers
+        headers = {}
         if config.provider.asr_api_key:
             headers["Authorization"] = f"Bearer {config.provider.asr_api_key}"
         
-        async with httpx.AsyncClient(timeout=timeout) as client, client.stream(
-            "POST",
-            provider_url,
-            content=_chunk_sender(audio_chunks),
-            headers=headers,
-        ) as response:
+        # Send as multipart form data (OpenAI Whisper format)
+        files = {
+            "file": ("audio.wav", audio_data, "audio/wav"),
+            "model": (None, "whisper-1"),
+        }
+        
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(
+                provider_url,
+                files=files,
+                headers=headers,
+            )
             response.raise_for_status()
-            async for line in response.aiter_lines():
-                if not line.strip():
-                    continue
-                import json
-
-                data = json.loads(line)
-                text: str = data.get("text", "")
-                is_final: bool = data.get("is_final", False)
-
-                if is_final:
-                    yield TranscriptionFinalEvent(
-                        correlation_id=correlation_id,
-                        payload=TranscriptionFinalPayload(text=text),
-                    )
-                else:
-                    yield TranscriptionProvisionalEvent(
-                        correlation_id=correlation_id,
-                        payload=TranscriptionProvisionalPayload(text=text),
-                    )
+            data = response.json()
+            text: str = data.get("text", "")
+            
+            # Emit transcription as final (no streaming from Whisper API)
+            yield TranscriptionFinalEvent(
+                correlation_id=correlation_id,
+                payload=TranscriptionFinalPayload(text=text),
+            )
     except httpx.TimeoutException:
         logger.error(
             "ASR provider timeout",
@@ -102,12 +99,6 @@ async def transcribe_stream(
         raise
 
 
-async def _chunk_sender(audio_chunks: AsyncIterator[bytes]) -> AsyncIterator[bytes]:
-    """Adapter to feed audio chunks as an async byte stream for httpx."""
-    async for chunk in audio_chunks:
-        yield chunk
-
-
 async def transcribe_audio(
     audio_data: bytes,
     *,
@@ -126,11 +117,21 @@ async def transcribe_audio(
         pool=config.service_timeout.connect_timeout,
     )
     try:
+        headers = {}
+        if config.provider.asr_api_key:
+            headers["Authorization"] = f"Bearer {config.provider.asr_api_key}"
+        
+        # Send as multipart form data (OpenAI Whisper format)
+        files = {
+            "file": ("audio.wav", audio_data, "audio/wav"),
+            "model": (None, "whisper-1"),
+        }
+        
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(
                 provider_url,
-                content=audio_data,
-                headers={"Content-Type": "application/octet-stream"},
+                files=files,
+                headers=headers,
             )
             resp.raise_for_status()
             data = resp.json()
