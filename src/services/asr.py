@@ -49,11 +49,15 @@ async def transcribe_stream(
     )
 
     try:
+        headers = {"Content-Type": "application/octet-stream"}
+        if config.provider.asr_api_key:
+            headers["Authorization"] = f"Bearer {config.provider.asr_api_key}"
+        
         async with httpx.AsyncClient(timeout=timeout) as client, client.stream(
             "POST",
             provider_url,
             content=_chunk_sender(audio_chunks),
-            headers={"Content-Type": "application/octet-stream"},
+            headers=headers,
         ) as response:
             response.raise_for_status()
             async for line in response.aiter_lines():

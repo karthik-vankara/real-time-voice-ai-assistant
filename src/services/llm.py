@@ -41,11 +41,15 @@ async def generate_response_stream(
     )
 
     try:
+        headers = {"Content-Type": "application/json"}
+        if config.provider.llm_api_key:
+            headers["Authorization"] = f"Bearer {config.provider.llm_api_key}"
+        
         async with httpx.AsyncClient(timeout=timeout) as client, client.stream(
             "POST",
             provider_url,
             json=payload,
-            headers={"Content-Type": "application/json"},
+            headers=headers,
         ) as response:
             response.raise_for_status()
             accumulated = ""
