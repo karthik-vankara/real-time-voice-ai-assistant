@@ -77,10 +77,10 @@ class SessionConfig:
 class ServiceTimeoutConfig:
     """Per-service HTTP/streaming timeout in seconds."""
 
-    asr_timeout: float = 1.0
-    llm_timeout: float = 1.0
-    tts_timeout: float = 0.5
-    connect_timeout: float = 0.5
+    asr_timeout: float = 30.0  # Whisper can take 10-20s for processing
+    llm_timeout: float = 30.0  # GPT streaming responses can take time
+    tts_timeout: float = 10.0  # TTS generation requires several seconds
+    connect_timeout: float = 5.0
 
 
 @dataclass(frozen=True, slots=True)
