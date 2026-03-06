@@ -24,27 +24,123 @@
 
 ## System Architecture
 
+### High-Level Overview
+
 ```
-Client (WebSocket) ──WSS──▶ FastAPI Server
-                              │
-                              ▼
-                      ┌───────────────┐
-                      │  Orchestrator  │  (pipeline/orchestrator.py)
-                      │  per-session   │
-                      └──┬────┬────┬──┘
-                         │    │    │
-               ┌─────────┘    │    └─────────┐
-               ▼              ▼              ▼
-          ┌─────────┐   ┌─────────┐   ┌─────────┐
-          │   ASR   │   │   LLM   │   │   TTS   │
-          │ adapter │   │ adapter │   │ adapter │
-          └────┬────┘   └────┬────┘   └────┬────┘
-               │              │              │
-          Circuit Breaker  Circuit Breaker  Circuit Breaker
-               │              │              │
-          External ASR    External LLM    External TTS
-          Provider        Provider        Provider
+┌───────────────────────────────────────────────────────────────────────┐
+│                              CLIENT LAYER                              │
+│  ┌────────────────────────────────────────────────────────────────┐   │
+│  │              React UI (Vercel)                                │   │
+│  │  - Audio recording + playback                                 │   │
+│  │  - Connection status display                                  │   │
+│  │  - Real-time event streaming                                  │   │
+│  └────────────────────────────────────────────────────────────────┘   │
+└───────────────────────────────────────────────────────────────────────┘
+                                    ║
+                         WebSocket (WSS)
+                                    ║
+┌───────────────────────────────────────────────────────────────────────┐
+│                         FASTAPI SERVER                                 │
+│  ┌────────────────────────────────────────────────────────────────┐   │
+│  │               WebSocket Connection Handler                     │   │
+│  │  - Receives audio chunks (16-bit PCM)                          │   │
+│  │  - Routes events to orchestrator per session                  │   │
+│  │  - Streams responses back to client                           │   │
+│  └────────────────────────────────────────────────────────────────┘   │
+│                                    ║                                    │
+│                        ┌───────────┴───────────┐                       │
+│                        ▼                       ▼                        │
+│  ┌──────────────────────────────┐  ┌──────────────────────────────┐   │
+│  │   Session Manager            │  │  Telemetry / Logging         │   │
+│  │  (pipeline/session_manager)  │  │  (telemetry/*, models/*)     │   │
+│  │  - Manage per-session state  │  │  - Latency tracking          │   │
+│  │  - Context window (10-turn)  │  │  - Correlation IDs           │   │
+│  └───────────────┬──────────────┘  │  - Event metrics             │   │
+│                  ▼                  └──────────────────────────────┘   │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │           Orchestrator (stream coordinator)                   │   │
+│  │        (pipeline/orchestrator.py per-session)                │   │
+│  │  - Schema-validated event handling                            │   │
+│  │  - ASR → LLM → TTS pipeline orchestration                     │   │
+│  │  - Task cancellation for barge-in detection                   │   │
+│  │  - Faithfulness verification (text matching)                  │   │
+│  └────┬─────────────────────────────┬───────────────────────┬────┘   │
+│       │                             │                       │         │
+│       ▼                             ▼                       ▼         │
+│  ┌──────────┐               ┌──────────┐            ┌──────────┐     │
+│  │   ASR    │               │   LLM    │            │   TTS    │     │
+│  │ Adapter  │               │ Adapter  │            │ Adapter  │     │
+│  └────┬─────┘               └────┬─────┘            └────┬─────┘     │
+│       │                          │                       │            │
+│       ▼                          ▼                       ▼            │
+│  ┌──────────────┐          ┌──────────────┐    ┌──────────────┐     │
+│  │   Circuit    │          │   Circuit    │    │   Circuit    │     │
+│  │   Breaker    │          │   Breaker    │    │   Breaker    │     │
+│  │  (ASR)       │          │  (LLM)       │    │  (TTS)       │     │
+│  └──────┬───────┘          └──────┬───────┘    └──────┬───────┘     │
+│         │                         │                    │             │
+│         ▼                         ▼                    ▼             │
+│   ┌──────────┐           ┌──────────────┐      ┌──────────┐         │
+│   │ Fallback │           │ Fallback     │      │ Fallback │         │
+│   │ Strategy │           │ Strategy     │      │ Strategy │         │
+│   │ (bridge) │           │ (bridge)     │      │ (cached) │         │
+│   └──────────┘           └──────────────┘      └──────────┘         │
+└───────────────────────────────────────────────────────────────────────┘
+        ║                       ║                       ║
+        ║ HTTP/HTTPS            ║ HTTP/HTTPS            ║ HTTP/HTTPS
+        ▼                       ▼                       ▼
+   ┌─────────┐           ┌──────────┐           ┌──────────┐
+   │   ASR   │           │   LLM    │           │   TTS    │
+   │Provider │           │Provider  │           │Provider  │
+   │(OpenAI  │           │(OpenAI   │           │(OpenAI   │
+   │Whisper) │           │GPT-3.5)  │           │tts-1-hd) │
+   └─────────┘           └──────────┘           └──────────┘
 ```
+
+### Data Flow
+
+#### Request Flow (Upstream)
+1. **Client → Server**: Audio frames (16-bit PCM) streamed over persistent WSS connection
+2. **Server → Orchestrator**: Audio chunks routed to active session orchestrator
+3. **Orchestrator → ASR Adapter**: Streaming audio forwarded to ASR provider
+4. **ASR → Orchestrator**: Provisional + final transcription events received
+5. **Orchestrator → LLM Adapter**: Final transcription + conversation context sent
+6. **LLM → Orchestrator**: Token-by-token response streamed back
+7. **Orchestrator → TTS Adapter**: Accumulated text buffered and sent for synthesis
+
+#### Response Flow (Downstream)
+1. **TTS → Orchestrator**: Audio chunks received
+2. **Orchestrator → Server**: TTS audio events queued for client
+3. **Server → Client**: Audio events streamed via WebSocket for immediate playback
+
+### Event Schema & Validation
+
+All internal events follow strict Pydantic v2 schemas:
+- `ASRTranscriptionEvent` (provisional/final variants)
+- `LLMTokenEvent` (with accumulated text)
+- `TTSAudioChunkEvent` (base64-encoded PCM)
+- `ErrorEvent` (with error codes and fallback flags)
+- Every event tagged with `correlation_id` for end-to-end tracing
+
+### Fault Tolerance
+
+**Circuit Breaker per Service**
+- State: CLOSED (healthy) → OPEN (failures detected) → HALF_OPEN (testing) → CLOSED
+- Threshold: 3 failures in 30s sliding window
+- Recovery cooldown: 10s, then single probe
+- Independent per ASR/LLM/TTS
+
+**Fallback Strategies**
+- **ASR Failure**: Bridge audio + "I didn't catch that, could you repeat?"
+- **LLM Failure**: Bridge audio + "Let me think about that..."
+- **TTS Failure**: Pre-generated cached audio clip
+
+**Barge-in Detection**
+- Task cancellation: `asyncio.Task.cancel()` on new user input
+- Graceful cleanup: `try/except CancelledError` in all pipeline stages
+- Immediate re-routing to new utterance
+
+---
 
 ### Data Flow
 
