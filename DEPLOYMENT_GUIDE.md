@@ -43,8 +43,11 @@
          ↓
     OpenAI APIs
     - Whisper ASR
-    - GPT-3.5-turbo LLM
+    - GPT-4o-mini (intent detection)
+    - GPT-4o (answer synthesis)
     - TTS (tts-1-hd)
+    Tavily Search API
+    - Real-time web search
 ```
 
 ### Why This Works:
@@ -171,10 +174,13 @@ Add these required variables:
 PROVIDER_MODE=real
 LOG_LEVEL=info
 OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxx
+SEARCH_API_KEY=tvly-xxxxxxxxxxxxx
+ENABLE_WEB_SEARCH=true
 ```
 
 **Critical Variables:**
 - `OPENAI_API_KEY` - Your OpenAI API key (get from openai.com/account/api-keys)
+- `SEARCH_API_KEY` - Your Tavily API key (get free at tavily.com, 1000 searches/month)
 
 ---
 
@@ -237,6 +243,8 @@ VITE_ENABLE_DIAGNOSTICS=true
 ```env
 PROVIDER_MODE=real
 OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxx
+SEARCH_API_KEY=tvly-xxxxxxxxxxxxx
+ENABLE_WEB_SEARCH=true
 LOG_LEVEL=info
 CORS_ORIGINS=https://real-time-voice-assistant.vercel.app
 ```
@@ -344,7 +352,9 @@ curl -v \
 5. Verify:
    - Audio captured ✓
    - Transcription appears ✓
-   - LLM response generated ✓
+   - Intent detected (for real-time queries) ✓
+   - Web search results (for real-time queries) ✓
+   - LLM response generated with accurate data ✓
    - Audio response plays ✓
 
 ### Monitoring After Deployment
@@ -569,8 +579,9 @@ async function connectWithRetry(url: string, maxRetries = 3) {
 |---------|------|------|-------|
 | Vercel | Free/Pro | $0-20 | Free tier includes generous limits |
 | Railway | Starter | $5-20 | ~2 GB RAM, auto-scaling available |
-| OpenAI | Pay-as-you-go | $0-50 | Depends on usage (transcription, LLM, TTS) |
-| **Total** | - | **$5-90/mo** | Scale with usage |
+| OpenAI | Pay-as-you-go | $0-50 | Depends on usage (ASR, GPT-4o-mini, GPT-4o, TTS) |
+| Tavily | Free/Pro | $0-50 | Free tier: 1000 searches/month |
+| **Total** | - | **$5-140/mo** | Scale with usage |
 
 ---
 
@@ -615,7 +626,7 @@ async function connectWithRetry(url: string, maxRetries = 3) {
 
 - [ ] Repository connected to Railway
 - [ ] Dockerfile exists and builds successfully
-- [ ] Environment variables set (OPENAI_API_KEY, etc.)
+- [ ] Environment variables set (OPENAI_API_KEY, SEARCH_API_KEY, ENABLE_WEB_SEARCH, etc.)
 - [ ] Backend health endpoint works
 - [ ] Can reach /health endpoint
 

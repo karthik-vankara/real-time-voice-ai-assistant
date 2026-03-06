@@ -87,6 +87,8 @@ Open browser: **http://localhost:5173**
   - 🔊 `speech_started`
   - 📝 `transcription_provisional` (interim)
   - ✅ `transcription_final` (complete)
+  - 🎯 `intent_detected` (shows intent: web_search/factual_lookup/direct)
+  - 🔍 `web_search_result` (search query + source count) *if real-time query*
   - 🤖 `llm_token` (GPT response tokens)
   - 🔊 `tts_audio_chunk` (audio for playback)
 
@@ -125,7 +127,9 @@ Open browser: **http://localhost:5173**
 | Feature | How to Test | Expected Behavior |
 |---------|------------|-------------------|
 | **Streaming ASR** | Start recording | Provisional + final transcriptions flow |
-| **LLM Tokens** | Watch event stream | Token-by-token response |
+| **Intent Detection** | Ask real-time query | `intent_detected` event with tool call |
+| **Web Search** | Ask "What's the Nifty 50 price?" | `web_search_result` with sources |
+| **LLM Tokens** | Watch event stream | Token-by-token response with exact data |
 | **TTS Audio** | Monitor chunks | Audio payload in base64 |
 | **Circuit Breaker** | (Stop mock provider) | Error event + fallback audio |
 | **Barge-in** | Record while processing | New audio cancels old |
@@ -204,6 +208,8 @@ LLM_PROVIDER_URL=https://api.openai.com/v1/chat/completions
 LLM_API_KEY=sk-...
 TTS_PROVIDER_URL=https://api.openai.com/v1/audio/speech
 TTS_API_KEY=sk-...
+SEARCH_API_KEY=tvly-...  # Get free key at https://tavily.com
+ENABLE_WEB_SEARCH=true
 ```
 
 2. **Restart backend**:

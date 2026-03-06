@@ -35,25 +35,29 @@ This is a **production-grade real-time voice conversational AI system** built wi
 │  ┌────────────────▼─────────────────────────────────────────┐  │
 │  │        Pipeline Orchestrator (orchestrator.py)           │  │
 │  │  • Session management (10-turn conversation history)     │  │
+│  │  • Intent detection via OpenAI function calling          │  │
+│  │  • Conditional web search (Tavily API)                   │  │
+│  │  • Dual-LLM: GPT-4o-mini (intent) + GPT-4o (answer)     │  │
 │  │  • Barge-in support (interrupt ongoing responses)        │  │
 │  │  • Audio validation (16-bit PCM format check)            │  │
 │  │  • Latency tracking (per-request measurements)           │  │
 │  └────────────────┬─────────────────────────────────────────┘  │
 │                   │                                              │
-│    ┌──────────────┼──────────────┐                              │
-│    │              │              │                              │
-│    ▼              ▼              ▼                              │
-│  ┌──────┐     ┌──────┐      ┌──────┐                           │
-│  │ ASR  │     │ LLM  │      │ TTS  │                           │
-│  │ 500ms│     │400ms │      │250ms │  (Latency budgets)       │
-│  │ TTFR │     │TTFT  │      │TTFB  │                           │
-│  └──────┘     └──────┘      └──────┘                           │
-│    │              │              │                              │
-│  ┌─▼──────────────▼──────────────▼─┐                           │
-│  │   Circuit Breakers + Fallbacks  │                           │
-│  │   • Per-service fault tolerance │                           │
-│  │   • Fallback: bridge audio      │                           │
-│  └────────────────────────────────┘                            │
+│    ┌──────────────┼──────────────┬──────────────┐               │
+│    │              │              │              │               │
+│    ▼              ▼              ▼              ▼               │
+│  ┌──────┐     ┌──────┐      ┌──────┐      ┌──────┐            │
+│  │ ASR  │     │Search│      │ LLM  │      │ TTS  │            │
+│  │ 500ms│     │<10s  │      │400ms │      │250ms │            │
+│  │ TTFR │     │      │      │TTFT  │      │TTFB  │            │
+│  └──────┘     └──────┘      └──────┘      └──────┘            │
+│    │              │              │              │               │
+│  ┌─▼──────────────▼──────────────▼──────────────▼─┐            │
+│  │   Circuit Breakers + Fallbacks                 │            │
+│  │   • Per-service fault tolerance                │            │
+│  │   • Search: graceful skip on failure           │            │
+│  │   • Fallback: bridge audio                     │            │
+│  └────────────────────────────────────────────────┘            │
 │                                                                 │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │        Telemetry System (metrics.py, dashboard.py)       │  │
@@ -66,9 +70,9 @@ This is a **production-grade real-time voice conversational AI system** built wi
     │            │            │
     ▼            ▼            ▼
 ┌─────────┐  ┌──────┐  ┌────────────┐
-│ OpenAI  │  │Mock  │  │ HuggingFace│ (External Services)
-│ Whisper │  │ASR   │  │ TTS        │
-│ GPT-4   │  │(dev) │  │ etc.       │
+│ OpenAI  │  │Mock  │  │ Tavily   │  │ HuggingFace│ (External Services)
+│ Whisper │  │ASR   │  │ Search   │  │ TTS        │
+│ GPT-4o  │  │(dev) │  │ API      │  │ etc.       │
 └─────────┘  └──────┘  └────────────┘
 ```
 
@@ -96,14 +100,29 @@ Audio chunks → ASR Service (Whisper API)
 ⏱ Latency: ~250-300ms
 ```
 
-**Stage B: Language Model (LLM)**
+**Stage B: Intent Detection & Web Search (LLM Call #1)**
 ```
-Transcript + 10-turn history → LLM (GPT-4 API)
-→ "I'm doing great! How can I help?" (response text)
+Transcript + 10-turn history + tool definitions → LLM (GPT-4o-mini)
+→ Decision: direct response OR tool call (web_search / factual_lookup)
 ⏱ Latency: ~140-150ms
 ```
 
-**Stage C: Text-to-Speech (TTS)**
+**Stage B.1: Web Search (Conditional)**
+```
+If LLM requests web_search or factual_lookup:
+  Search query → Tavily API (advanced depth, 5 results)
+  → Formatted search results (answer + sources)
+  ⏱ Latency: ~500-2000ms (depends on search complexity)
+```
+
+**Stage C: Answer Synthesis (LLM Call #2 — only if search was needed)**
+```
+Search results + strict system prompt → LLM (GPT-4o, temp=0)
+→ "The Nifty 50 is currently at 24,450.45" (exact data from search)
+⏱ Latency: ~200-300ms
+```
+
+**Stage D: Text-to-Speech (TTS)**
 ```
 Response text → TTS Service (TTS API)
 → Audio chunks streamed back to browser
@@ -116,6 +135,8 @@ Response text → TTS Service (TTS API)
   - `speech_started`
   - `transcription_provisional` (interim results)
   - `transcription_final`
+  - `intent_detected` (tool call intent: web_search, factual_lookup, or direct)
+  - `web_search_result` (search query, results summary, source count)
   - `llm_token` (streaming LLM output)
   - `tts_audio_chunk` (streamed audio)
 - Events flow back via WebSocket as JSON
@@ -136,8 +157,20 @@ Response text → TTS Service (TTS API)
 - WebSocket streams are handled concurrently
 - Multiple sessions can run simultaneously
 
+### 🧠 **Smart Intent Detection**
+- OpenAI function calling (no separate intent service)
+- LLM autonomously decides: answer directly vs. search the web
+- Two-pass LLM: GPT-4o-mini for intent, GPT-4o for factual synthesis
+- Strict system prompt + temperature=0 ensures exact number citation
+
+### 🔍 **Real-Time Web Search**
+- Tavily API integration for real-time data (stocks, news, weather, etc.)
+- Advanced search depth, up to 5 results + AI-generated answer
+- Feature flag: `ENABLE_WEB_SEARCH` env var to toggle
+- Graceful degradation: if search fails, LLM answers without it
+
 ### 🛡️ **Circuit Breaker Pattern**
-- Per-service failure tracking (ASR, LLM, TTS)
+- Per-service failure tracking (ASR, LLM, TTS, Search)
 - Auto-opens on 3 failures in 30 seconds
 - Prevents cascading failures
 - Fallback: if service down, plays synthesized message
@@ -160,6 +193,7 @@ Response text → TTS Service (TTS API)
 
 ### 🔐 **Configuration via Environment**
 - Provider selection: `PROVIDER_MODE=mock|real`
+- Web search toggle: `ENABLE_WEB_SEARCH=true|false`
 - Mock providers for dev/testing (no API keys needed)
 - Real providers for production
 - TLS enforcement configurable

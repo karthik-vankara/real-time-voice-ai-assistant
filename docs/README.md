@@ -61,20 +61,22 @@ Welcome to the Real-Time Voice Assistant documentation! This comprehensive guide
 - Line-by-line explanation of each Python file
 - `config.py` - Configuration management
 - `server.py` - FastAPI entry point
-- `models/events.py` - Event definitions
+- `models/events.py` - Event definitions (incl. IntentDetected, WebSearchResult)
 - `models/session.py` - Session tracking
 - `models/telemetry.py` - Latency records
 - `services/circuit_breaker.py` - Fault tolerance
 - `services/asr.py` - Speech recognition
-- `services/llm.py` - Language model
+- `services/llm.py` - Language model (dual-model: intent + answer)
 - `services/tts.py` - Text-to-speech
-- `pipeline/orchestrator.py` - Main pipeline coordinator
+- `services/search.py` - **Web search (Tavily API) — NEW**
+- `services/tools.py` - **OpenAI function calling tool definitions — NEW**
+- `pipeline/orchestrator.py` - Main pipeline coordinator (incl. _handle_tool_call)
 - `pipeline/session_manager.py` - Session lifecycle
 - `pipeline/replay.py` - Session replay
 - `telemetry/metrics.py` - Latency tracking
 - `telemetry/dashboard.py` - Metrics endpoint
 - `telemetry/logger.py` - Structured logging
-- `mock_providers.py` - Development mocks
+- `mock_providers.py` - Development mocks (incl. search)
 
 **Best for:** Deep-dive code understanding, file-by-file breakdown.
 
@@ -131,22 +133,29 @@ External Services (OpenAI, HuggingFace, etc)
 1. **Audio Capture** - Microphone → 16-bit PCM (frontend)
 2. **Audio Accumulation** - Chunks buffered until end_of_utterance (backend)
 3. **ASR** - Audio → Text (~250-300ms)
-4. **LLM** - Text → Response (~140-150ms)
-5. **TTS** - Response → Audio (~130-140ms)
-6. **Telemetry** - Latency recorded and aggregated
+4. **Intent Detection** - LLM (GPT-4o-mini) decides: respond directly or search the web
+5. **Web Search** - Tavily API for real-time data (conditional, only when needed)
+6. **Answer Synthesis** - LLM (GPT-4o, temp=0) synthesizes search results into spoken answer
+7. **TTS** - Response → Audio (~130-140ms)
+8. **Telemetry** - Latency recorded and aggregated
 
 ### Key Technologies
 - **Backend:** Python 3.13, FastAPI, asyncio, Pydantic
 - **Frontend:** React 18, TypeScript, Web Audio API, TailwindCSS
+- **LLM (Intent):** GPT-4o-mini with OpenAI function calling
+- **LLM (Answer):** GPT-4o with temperature=0 for accurate factual responses
+- **Web Search:** Tavily API (advanced depth, 5 results, AI-generated answers)
 - **Communication:** WebSocket (binary audio, JSON events)
 - **Observability:** Structured logging, percentile latencies
 
 ### Design Principles
 - **Real-time streaming** - Events/audio streamed, not batched
+- **Smart intent routing** - LLM decides when web search is needed
+- **Accurate factual responses** - GPT-4o + temp=0 + strict prompts for exact numbers
 - **Resilience** - Circuit breakers, fallbacks, graceful degradation
 - **Observability** - Telemetry, correlation IDs, structured logs
 - **Performance** - Sub-1.2s P95 latency target
-- **Developer-friendly** - Environment-based config, mock providers
+- **Developer-friendly** - Environment-based config, mock providers, feature flags
 
 ---
 
@@ -212,6 +221,10 @@ SERVER_WS_PATH=/ws
 OPENAI_API_KEY=sk-...
 HUGGINGFACE_API_KEY=hf_...
 
+# Web Search (Tavily API)
+SEARCH_API_KEY=tvly-...  # Get free at https://tavily.com
+ENABLE_WEB_SEARCH=true    # Feature flag to toggle search
+
 # Performance targets
 ASR_BUDGET_MS=500
 LLM_BUDGET_MS=400
@@ -233,10 +246,10 @@ SERVER_REQUIRE_TLS=false
 |-------|------|-------|---------|
 | **Backend** | config.py | ~100 | Environment config |
 | | server.py | ~150 | FastAPI entry point |
-| | orchestrator.py | ~400 | Main pipeline |
+| | orchestrator.py | ~500 | Main pipeline (incl. _handle_tool_call) |
 | | metrics.py | ~150 | Latency tracking |
-| | models/*.py | ~330 | Data models |
-| | services/*.py | ~300 | ASR/LLM/TTS services |
+| | models/*.py | ~330 | Data models (incl. IntentDetected, WebSearchResult) |
+| | services/*.py | ~750 | ASR/LLM/TTS/Search/Tools services |
 | **Frontend** | App.tsx | ~150 | Root component |
 | | components/*.tsx | ~800 | React components |
 | | services/websocket.ts | ~150 | WebSocket client |
@@ -282,6 +295,6 @@ For questions about specific components:
 
 ---
 
-**Last Updated:** March 5, 2026
-**Version:** 1.0.0
+**Last Updated:** March 6, 2026
+**Version:** 2.0.0 (Intent Detection + Web Search)
 **Status:** Production-Ready ✅

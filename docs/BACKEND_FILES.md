@@ -26,8 +26,10 @@ class ProviderConfig:
     llm_url: str = "..."            # LLM service endpoint
     tts_url: str = "..."            # TTS service endpoint
     api_keys: dict[str, str]        # API keys for services
+    search_api_key: str = ""        # Tavily API key for web search
+    enable_web_search: bool = True  # Feature flag to toggle search
 ```
-**Why:** Allows swapping between providers (dev vs production) without code changes.
+**Why:** Allows swapping between providers (dev vs production) without code changes. Web search is toggleable via env var.
 
 #### `TelemetryConfig`
 ```python
@@ -140,9 +142,10 @@ class PipelineStage(str, Enum):
     ASR = "asr"
     LLM = "llm"
     TTS = "tts"
+    SEARCH = "search"
     TELEMETRY = "telemetry"
 ```
-**Why:** Log tag to identify which component generated the event.
+**Why:** Log tag to identify which component generated the event. Includes `SEARCH` stage for web search events.
 
 ### Base Event
 ```python
@@ -170,6 +173,14 @@ class LLMTokenEvent(BaseEvent):
 class TTSAudioChunkEvent(BaseEvent):
     event_type: str = "tts_audio_chunk"
     payload: TTSAudioChunkPayload
+
+class IntentDetectedEvent(BaseEvent):
+    event_type: str = "intent_detected"
+    payload: IntentDetectedPayload  # intent, query, requires_search
+
+class WebSearchResultEvent(BaseEvent):
+    event_type: str = "web_search_result"
+    payload: WebSearchResultPayload  # query, results_summary, source_count
 
 class ErrorEvent(BaseEvent):
     event_type: str = "error"
@@ -332,34 +343,117 @@ class ASRService:
 
 ## 8. src/services/llm.py - Language Model
 
-**Purpose:** Generate conversational responses.
+**Purpose:** Generate conversational responses with intent detection via OpenAI function calling.
 
-### LLM Service
+### Key Components
+
+#### `ToolCallRequest` dataclass
 ```python
-class LLMService:
-    async def generate(self, prompt: str, context: str) -> str:
-        """
-        Generate LLM response given prompt + context.
-        
-        Args:
-            prompt: Current user message
-            context: Last 10-turn conversation history
-        
-        Returns:
-            Generated response text
-        """
-        system_prompt = f"""You are a friendly voice assistant.
-Context: {context}
-User just said: {prompt}
-Respond naturally in ~1-2 sentences."""
-        
-        if config.provider.mode == "mock":
-            return await mock_provider.llm_generate(system_prompt)
-        else:
-            return await openai_gpt4.generate(system_prompt)
+@dataclass
+class ToolCallRequest:
+    name: str        # "web_search" or "factual_lookup"
+    arguments: dict  # {"query": "..."}
+    tool_call_id: str
 ```
 
-**Why:** LLM with context awareness. Produces coherent multi-turn conversations.
+#### `ToolCallRequested` exception
+Raised when the LLM streams a tool call instead of text. The orchestrator catches this and dispatches web search.
+
+#### `generate_response_stream()` (LLM Call #1 — Intent)
+```python
+async def generate_response_stream(
+    user_text, context, *, correlation_id, tools=None
+) -> AsyncIterator[LLMTokenEvent]:
+    # Model: gpt-4o-mini, temperature: 0.7
+    # If tools provided: LLM can invoke web_search or factual_lookup
+    # Monitors streaming SSE for tool_calls in delta responses
+    # Raises ToolCallRequested if LLM wants a tool
+    # Otherwise yields LLMTokenEvent for each text token
+```
+
+#### `generate_response_with_tool_result()` (LLM Call #2 — Answer)
+```python
+async def generate_response_with_tool_result(
+    messages, *, correlation_id
+) -> AsyncIterator[LLMTokenEvent]:
+    # Model: gpt-4o (better instruction following)
+    # Temperature: 0 (deterministic, no hallucination)
+    # No tools passed — always produces text
+    # Used after search results are injected into messages
+```
+
+**Why:** Dual-model architecture ensures fast intent detection (GPT-4o-mini) and accurate factual responses (GPT-4o with temp=0).
+
+---
+
+## 8a. src/services/search.py - Web Search (NEW)
+
+**Purpose:** Execute real-time web searches via Tavily API.
+
+### `web_search()` function
+```python
+async def web_search(
+    query: str,
+    *,
+    search_depth: str = "advanced",  # "basic" or "advanced"
+    max_results: int = 5,
+    correlation_id: str,
+) -> str:
+    # Calls Tavily API: https://api.tavily.com/search
+    # Returns formatted string with:
+    #   - AI-generated quick answer
+    #   - Numbered search results (title, content, URL)
+    # Returns empty string on failure (graceful degradation)
+```
+
+### `_format_search_results()` helper
+```python
+def _format_search_results(data: dict, query: str) -> str:
+    # Formats Tavily response into LLM-consumable context:
+    # "Quick Answer: Nifty 50 is at 24,450.45"
+    # "1. Economic Times\n   Content...\n   Source: https://..."
+    # Truncates content to 300 chars per result
+```
+
+**Why:** Clean adapter pattern. Tavily provides structured results + AI answer. Graceful error handling returns empty string so pipeline continues.
+
+---
+
+## 8b. src/services/tools.py - Tool Definitions (NEW)
+
+**Purpose:** Define OpenAI function calling tools available to the LLM.
+
+### Tool Definitions
+```python
+WEB_SEARCH_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": "Search the internet for real-time information...",
+        "parameters": {
+            "properties": {
+                "query": {"type": "string"},
+                "search_type": {"type": "string", "enum": ["general", "news"]}
+            },
+            "required": ["query"]
+        }
+    }
+}
+
+FACTUAL_LOOKUP_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "factual_lookup",
+        "description": "Verify a specific factual claim...",
+        "parameters": { ... }
+    }
+}
+
+AVAILABLE_TOOLS = [WEB_SEARCH_TOOL, FACTUAL_LOOKUP_TOOL]
+TOOL_REGISTRY = {t["function"]["name"]: t for t in AVAILABLE_TOOLS}
+```
+
+**Why:** Centralized tool definitions. LLM uses these schemas to decide when to call tools. The orchestrator uses `TOOL_REGISTRY` for quick lookup.
 
 ---
 
@@ -427,7 +521,7 @@ class SessionManager:
 
 ## 11. src/pipeline/orchestrator.py - Main Pipeline Coordinator
 
-**Purpose:** The heart of the system. Orchestrates ASR → LLM → TTS, tracks latency, emits events.
+**Purpose:** The heart of the system. Orchestrates ASR → LLM (Intent) → [Web Search] → LLM (Answer) → TTS, tracks latency, emits events.
 
 ### validate_audio_frame()
 ```python
@@ -524,7 +618,7 @@ async def _session_loop(ws: WebSocket, session: Session) -> None:
 ### _run_pipeline()
 ```python
 async def _run_pipeline(ws, session, audio_chunks, correlation_id):
-    """Execute ASR → LLM → TTS."""
+    """Execute ASR → LLM (Intent) → [Search] → LLM (Answer) → TTS."""
     tracker = LatencyTracker(correlation_id)
     
     # ASR
@@ -535,9 +629,14 @@ async def _run_pipeline(ws, session, audio_chunks, correlation_id):
     if not final_text:
         return
     
-    # LLM
+    # LLM (with intent detection + optional web search)
     tracker.start("llm")
     llm_text = await _run_llm(ws, session, final_text, correlation_id)
+    # _run_llm now internally handles:
+    #   - Passing tool definitions (web_search, factual_lookup)
+    #   - Catching ToolCallRequested exceptions
+    #   - Delegating to _handle_tool_call() for search
+    #   - Returning final response text
     tracker.stop("llm")
     
     if not llm_text:
@@ -548,17 +647,25 @@ async def _run_pipeline(ws, session, audio_chunks, correlation_id):
     await _run_tts(ws, llm_text, correlation_id)
     tracker.stop("tts")
     
-    # Update history
+    # Update history + telemetry
     session.add_turn(user_text=final_text, assistant_text=llm_text)
-    
-    # Record telemetry
     record = tracker.to_record()
     aggregator.add(record)
-    
-    logger.info(
-        f"Latency: total={record.total_e2e_ms:.1f}ms asr={record.asr_ms:.1f}ms ...",
-        correlation_id=correlation_id
-    )
+```
+
+### _handle_tool_call() (NEW)
+```python
+async def _handle_tool_call(ws, session, tool_call, user_text, context, correlation_id):
+    """Execute a tool call requested by the LLM."""
+    # 1. Emit IntentDetectedEvent to frontend
+    # 2. Execute Tavily web search (via circuit breaker _search_cb)
+    # 3. Emit WebSearchResultEvent to frontend
+    # 4. Build messages with strict system prompt:
+    #    "Your ONLY job is to speak the exact data from the search results.
+    #     Quote ALL numbers EXACTLY as they appear."
+    # 5. Call generate_response_with_tool_result() (GPT-4o, temp=0)
+    # 6. Stream response tokens back to client
+    # 7. Return accumulated response text
 ```
 
 **Why:** Main pipeline logic. Tracks every stage. Emits events. Records telemetry.
@@ -746,7 +853,18 @@ async def tts_stream(text: str) -> AsyncGenerator[bytes, None]:
         yield b"\x00\x01" * 512  # 1KB of silence
 ```
 
-**Why:** Test full pipeline without API costs/keys.
+### Mock Search (NEW)
+```python
+@app.post("/search/query")
+async def mock_search(request: dict):
+    """Return mock Tavily-like search results."""
+    return {
+        "answer": "Mock search answer for: " + request.get("query", ""),
+        "results": [{"title": "Mock Result", "content": "...", "url": "https://example.com"}]
+    }
+```
+
+**Why:** Test full pipeline without API costs/keys. Search mock enables testing the intent detection flow.
 
 ---
 
@@ -756,20 +874,22 @@ async def tts_stream(text: str) -> AsyncGenerator[bytes, None]:
 |------|-------|---------|
 | config.py | ~100 | Environment configuration |
 | server.py | ~150 | FastAPI entry point |
-| events.py | ~200 | Event type definitions |
+| events.py | ~200 | Event type definitions (incl. IntentDetected, WebSearchResult) |
 | session.py | ~80 | Conversation tracking |
 | telemetry.py | ~50 | Latency record model |
 | circuit_breaker.py | ~120 | Fault tolerance |
 | asr.py | ~80 | Speech recognition |
-| llm.py | ~100 | Language generation |
+| llm.py | ~330 | Language generation (dual-model: intent + answer) |
 | tts.py | ~100 | Text-to-speech |
+| **search.py** | **~140** | **Web search (Tavily API) — NEW** |
+| **tools.py** | **~75** | **OpenAI function calling tool definitions — NEW** |
 | session_manager.py | ~100 | Session lifecycle |
-| orchestrator.py | ~400 | **Main pipeline** |
+| orchestrator.py | ~500 | **Main pipeline** (incl. _handle_tool_call) |
 | replay.py | ~200 | Session replay |
 | metrics.py | ~150 | Latency tracking |
 | dashboard.py | ~50 | Metrics endpoint |
 | logger.py | ~100 | Structured logging |
-| mock_providers.py | ~200 | Development mocks |
+| mock_providers.py | ~200 | Development mocks (incl. search) |
 
 ---
 
