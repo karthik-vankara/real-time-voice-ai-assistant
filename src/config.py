@@ -80,6 +80,7 @@ class ServiceTimeoutConfig:
     asr_timeout: float = 30.0  # Whisper can take 10-20s for processing
     llm_timeout: float = 30.0  # GPT streaming responses can take time
     tts_timeout: float = 10.0  # TTS generation requires several seconds
+    search_timeout: float = 10.0  # Web search API timeout
     connect_timeout: float = 5.0
 
 
@@ -124,6 +125,8 @@ class ProviderConfig:
     llm_api_key: str
     tts_url: str
     tts_api_key: str
+    search_api_key: str = ""
+    enable_web_search: bool = True
 
 
 def _load_provider_config() -> ProviderConfig:
@@ -135,6 +138,9 @@ def _load_provider_config() -> ProviderConfig:
     """
     mode = os.getenv("PROVIDER_MODE", "real").lower()
 
+    enable_search_str = os.getenv("ENABLE_WEB_SEARCH", "true").lower()
+    enable_web_search = enable_search_str not in ("false", "0", "no", "off")
+
     if mode == "mock":
         # Mock services point to single localhost:9000
         return ProviderConfig(
@@ -144,6 +150,8 @@ def _load_provider_config() -> ProviderConfig:
             llm_api_key="",
             tts_url="http://localhost:9000/tts/stream",
             tts_api_key="",
+            search_api_key="",
+            enable_web_search=enable_web_search,
         )
     else:
         # Real providers from env vars
@@ -154,6 +162,8 @@ def _load_provider_config() -> ProviderConfig:
             llm_api_key=os.getenv("LLM_API_KEY", ""),
             tts_url=os.getenv("TTS_PROVIDER_URL", "http://localhost:9003/tts/stream"),
             tts_api_key=os.getenv("TTS_API_KEY", ""),
+            search_api_key=os.getenv("SEARCH_API_KEY", ""),
+            enable_web_search=enable_web_search,
         )
 
 

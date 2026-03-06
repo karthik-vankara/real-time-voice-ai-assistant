@@ -31,6 +31,10 @@ export function EventsDisplay({ events, onPlayAudio }) {
                 return 'bg-amber-900 border-amber-700';
             case 'transcription_final':
                 return 'bg-green-900 border-green-700';
+            case 'intent_detected':
+                return 'bg-orange-900 border-orange-700';
+            case 'web_search_result':
+                return 'bg-teal-900 border-teal-700';
             case 'llm_token':
                 return 'bg-purple-900 border-purple-700';
             case 'tts_audio_chunk':
@@ -49,6 +53,10 @@ export function EventsDisplay({ events, onPlayAudio }) {
                 return '📝';
             case 'transcription_final':
                 return '✅';
+            case 'intent_detected':
+                return '🎯';
+            case 'web_search_result':
+                return '🔍';
             case 'llm_token':
                 return '🤖';
             case 'tts_audio_chunk':
@@ -66,6 +74,15 @@ export function EventsDisplay({ events, onPlayAudio }) {
             const bytes = payload.audio_b64 ? Math.ceil(payload.audio_b64.length * 0.75) : 0;
             const isLast = payload.is_last ? ' (final)' : '';
             return `Audio chunk: ${bytes} bytes${isLast}`;
+        }
+        // Handle intent detected events
+        if (event.event_type === 'intent_detected') {
+            const searchIcon = payload.requires_search ? '🔍 Searching: ' : '💬 Direct: ';
+            return `${searchIcon}${payload.intent}${payload.query ? ` — "${payload.query}"` : ''}`;
+        }
+        // Handle web search result events
+        if (event.event_type === 'web_search_result') {
+            return `Found ${payload.source_count} sources for "${payload.query}"${payload.results_summary ? `\n${payload.results_summary}` : ''}`;
         }
         if (payload.text)
             return payload.text;

@@ -69,6 +69,12 @@ _REGISTRY: dict[PipelineStage, FallbackStrategy] = {
         bridge_clip=BridgeAudioType.ONE_MOMENT,
         description="Serve pre-generated fallback audio clip",
     ),
+    PipelineStage.SEARCH: FallbackStrategy(
+        service=PipelineStage.SEARCH,
+        action=FallbackAction.NONE,
+        bridge_clip=None,
+        description="Skip search and route directly to LLM (graceful degradation)",
+    ),
 }
 
 

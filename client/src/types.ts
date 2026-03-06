@@ -3,6 +3,8 @@ export interface PipelineEvent {
     | 'speech_started'
     | 'transcription_provisional'
     | 'transcription_final'
+    | 'intent_detected'
+    | 'web_search_result'
     | 'llm_token'
     | 'tts_audio_chunk'
     | 'error'
@@ -53,5 +55,23 @@ export interface ErrorEvent extends PipelineEvent {
   payload: {
     error_type: string
     message: string
+  }
+}
+
+export interface IntentDetectedEvent extends PipelineEvent {
+  event_type: 'intent_detected'
+  payload: {
+    intent: string
+    query: string
+    requires_search: boolean
+  }
+}
+
+export interface WebSearchResultEvent extends PipelineEvent {
+  event_type: 'web_search_result'
+  payload: {
+    query: string
+    results_summary: string
+    source_count: number
   }
 }

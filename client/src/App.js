@@ -96,6 +96,21 @@ function App() {
                         size: Math.ceil(payload.audio_b64.length * 0.75),
                     });
                 }
+                else if (event.event_type === 'intent_detected') {
+                    const payload = event.payload;
+                    console.log('[INTENT]', {
+                        intent: payload.intent,
+                        query: payload.query,
+                        requires_search: payload.requires_search,
+                    });
+                }
+                else if (event.event_type === 'web_search_result') {
+                    const payload = event.payload;
+                    console.log('[SEARCH RESULT]', {
+                        query: payload.query,
+                        source_count: payload.source_count,
+                    });
+                }
                 setEvents((prev) => {
                     const updated = [event, ...prev];
                     return updated.slice(0, 100); // Keep last 100 events

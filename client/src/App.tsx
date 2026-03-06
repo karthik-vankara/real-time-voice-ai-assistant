@@ -112,6 +112,19 @@ function App() {
               is_last: payload.is_last,
               size: Math.ceil(payload.audio_b64.length * 0.75),
             })
+          } else if (event.event_type === 'intent_detected') {
+            const payload = event.payload as any
+            console.log('[INTENT]', {
+              intent: payload.intent,
+              query: payload.query,
+              requires_search: payload.requires_search,
+            })
+          } else if (event.event_type === 'web_search_result') {
+            const payload = event.payload as any
+            console.log('[SEARCH RESULT]', {
+              query: payload.query,
+              source_count: payload.source_count,
+            })
           }
           setEvents((prev) => {
             const updated = [event, ...prev]

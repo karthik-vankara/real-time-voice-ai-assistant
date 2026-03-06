@@ -1,1 +1,1 @@
-"""External service adapters (ASR, LLM, TTS) and circuit breaker."""
+"""External service adapters (ASR, LLM, TTS, Search) and circuit breaker."""
