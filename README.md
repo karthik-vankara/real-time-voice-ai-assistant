@@ -14,11 +14,13 @@
 3. Click **"Start Recording"** and speak your query
 4. Watch as the system:
    - Transcribes your speech (ASR - Whisper)
-   - Generates an AI response (LLM - GPT-3.5-turbo)
+   - Detects intent via OpenAI function calling (GPT-4o-mini)
+   - Searches the web for real-time data when needed (Tavily API)
+   - Generates an accurate AI response (LLM - GPT-4o)
    - Converts text to speech (TTS - OpenAI tts-1-hd)
    - Plays the audio response automatically
 
-**Technology Stack:** React 18.2 (Vercel) + FastAPI (Railway) + OpenAI APIs
+**Technology Stack:** React 18.2 (Vercel) + FastAPI (Railway) + OpenAI APIs + Tavily Search API
 
 ---
 
@@ -61,40 +63,40 @@
 │  │           Orchestrator (stream coordinator)                   │   │
 │  │        (pipeline/orchestrator.py per-session)                │   │
 │  │  - Schema-validated event handling                            │   │
-│  │  - ASR → LLM → TTS pipeline orchestration                     │   │
+│  │  - ASR → Intent Detection → [Web Search] → LLM → TTS         │   │
+│  │  - OpenAI function calling for intent routing                 │   │
 │  │  - Task cancellation for barge-in detection                   │   │
-│  │  - Faithfulness verification (text matching)                  │   │
-│  └────┬─────────────────────────────┬───────────────────────┬────┘   │
-│       │                             │                       │         │
-│       ▼                             ▼                       ▼         │
-│  ┌──────────┐               ┌──────────┐            ┌──────────┐     │
-│  │   ASR    │               │   LLM    │            │   TTS    │     │
-│  │ Adapter  │               │ Adapter  │            │ Adapter  │     │
-│  └────┬─────┘               └────┬─────┘            └────┬─────┘     │
-│       │                          │                       │            │
-│       ▼                          ▼                       ▼            │
-│  ┌──────────────┐          ┌──────────────┐    ┌──────────────┐     │
-│  │   Circuit    │          │   Circuit    │    │   Circuit    │     │
-│  │   Breaker    │          │   Breaker    │    │   Breaker    │     │
-│  │  (ASR)       │          │  (LLM)       │    │  (TTS)       │     │
-│  └──────┬───────┘          └──────┬───────┘    └──────┬───────┘     │
-│         │                         │                    │             │
-│         ▼                         ▼                    ▼             │
-│   ┌──────────┐           ┌──────────────┐      ┌──────────┐         │
-│   │ Fallback │           │ Fallback     │      │ Fallback │         │
-│   │ Strategy │           │ Strategy     │      │ Strategy │         │
-│   │ (bridge) │           │ (bridge)     │      │ (cached) │         │
-│   └──────────┘           └──────────────┘      └──────────┘         │
+│  └────┬──────────────┬──────────────┬───────────────────────┬────┘   │
+│       │                  │                      │                │    │
+│       ▼                  ▼                      ▼                ▼    │
+│  ┌──────────┐     ┌───────────┐          ┌──────────┐    ┌──────────┐│
+│  │   ASR    │     │  Search   │          │   LLM    │    │   TTS    ││
+│  │ Adapter  │     │  Adapter  │          │ Adapter  │    │ Adapter  ││
+│  └────┬─────┘     └─────┬─────┘          └────┬─────┘    └────┬─────┘│
+│       │                 │                     │               │      │
+│       ▼                 ▼                     ▼               ▼      │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐│
+│  │   Circuit    │ │   Circuit    │ │   Circuit    │ │   Circuit    ││
+│  │   Breaker    │ │   Breaker    │ │   Breaker    │ │   Breaker    ││
+│  │  (ASR)       │ │  (Search)    │ │  (LLM)       │ │  (TTS)       ││
+│  └──────┬───────┘ └──────┬───────┘ └──────┬───────┘ └──────┬───────┘│
+│         │                │                │                │        │
+│         ▼                ▼                ▼                ▼        │
+│   ┌──────────┐    ┌──────────┐    ┌──────────────┐   ┌──────────┐  │
+│   │ Fallback │    │ Fallback │    │ Fallback     │   │ Fallback │  │
+│   │ Strategy │    │ Strategy │    │ Strategy     │   │ Strategy │  │
+│   │ (bridge) │    │ (skip)   │    │ (bridge)     │   │ (cached) │  │
+│   └──────────┘    └──────────┘    └──────────────┘   └──────────┘  │
 └───────────────────────────────────────────────────────────────────────┘
-        ║                       ║                       ║
-        ║ HTTP/HTTPS            ║ HTTP/HTTPS            ║ HTTP/HTTPS
-        ▼                       ▼                       ▼
-   ┌─────────┐           ┌──────────┐           ┌──────────┐
-   │   ASR   │           │   LLM    │           │   TTS    │
-   │Provider │           │Provider  │           │Provider  │
-   │(OpenAI  │           │(OpenAI   │           │(OpenAI   │
-   │Whisper) │           │GPT-3.5)  │           │tts-1-hd) │
-   └─────────┘           └──────────┘           └──────────┘
+        ║                ║                  ║                ║
+        ║ HTTP/HTTPS     ║ HTTP/HTTPS       ║ HTTP/HTTPS     ║ HTTP/HTTPS
+        ▼                ▼                  ▼                ▼
+   ┌─────────┐    ┌──────────┐       ┌──────────┐     ┌──────────┐
+   │   ASR   │    │  Search  │       │   LLM    │     │   TTS    │
+   │Provider │    │ Provider │       │Provider  │     │Provider  │
+   │(OpenAI  │    │ (Tavily  │       │(OpenAI   │     │(OpenAI   │
+   │Whisper) │    │  API)    │       │GPT-4o)   │     │tts-1-hd) │
+   └─────────┘    └──────────┘       └──────────┘     └──────────┘
 ```
 
 ### Data Flow
@@ -104,9 +106,13 @@
 2. **Server → Orchestrator**: Audio chunks routed to active session orchestrator
 3. **Orchestrator → ASR Adapter**: Streaming audio forwarded to ASR provider
 4. **ASR → Orchestrator**: Provisional + final transcription events received
-5. **Orchestrator → LLM Adapter**: Final transcription + conversation context sent
-6. **LLM → Orchestrator**: Token-by-token response streamed back
-7. **Orchestrator → TTS Adapter**: Accumulated text buffered and sent for synthesis
+5. **Orchestrator → LLM (Call #1 — Intent Detection)**: Transcription + context + tool definitions sent to GPT-4o-mini
+6. **LLM decides**: Either responds directly (general conversation) or requests a tool call (web_search / factual_lookup)
+7. **If tool call → Orchestrator → Search Adapter**: Executes Tavily web search
+8. **Search → Orchestrator**: Formatted search results returned
+9. **Orchestrator → LLM (Call #2 — Answer Synthesis)**: Search results + strict system prompt sent to GPT-4o (temperature=0)
+10. **LLM → Orchestrator**: Token-by-token response streamed back with exact data from search
+11. **Orchestrator → TTS Adapter**: Accumulated text buffered and sent for synthesis
 
 #### Response Flow (Downstream)
 1. **TTS → Orchestrator**: Audio chunks received
@@ -117,6 +123,8 @@
 
 All internal events follow strict Pydantic v2 schemas:
 - `ASRTranscriptionEvent` (provisional/final variants)
+- `IntentDetectedEvent` (intent type, search query, requires_search flag)
+- `WebSearchResultEvent` (query, results summary, source count)
 - `LLMTokenEvent` (with accumulated text)
 - `TTSAudioChunkEvent` (base64-encoded PCM)
 - `ErrorEvent` (with error codes and fallback flags)
@@ -132,6 +140,7 @@ All internal events follow strict Pydantic v2 schemas:
 
 **Fallback Strategies**
 - **ASR Failure**: Bridge audio + "I didn't catch that, could you repeat?"
+- **Search Failure**: Graceful skip — LLM responds without search results (no user-visible error)
 - **LLM Failure**: Bridge audio + "Let me think about that..."
 - **TTS Failure**: Pre-generated cached audio clip
 
@@ -147,10 +156,12 @@ All internal events follow strict Pydantic v2 schemas:
 1. **Client → Server**: 16-bit PCM audio chunks over persistent WebSocket (WSS).
 2. **Server → ASR**: Streaming audio forwarded via httpx chunked POST.
 3. **ASR → Orchestrator**: `transcription_provisional` and `transcription_final` events.
-4. **Orchestrator → LLM**: Final transcription + 10-turn context sent for reasoning.
-5. **LLM → Orchestrator**: Token-by-token streaming response.
-6. **Orchestrator → TTS**: Accumulated text sent for synthesis.
-7. **TTS → Client**: `tts_audio_chunk` events streamed back via WebSocket.
+4. **Orchestrator → LLM**: Final transcription + 10-turn context + tool definitions sent for intent detection.
+5. **LLM (GPT-4o-mini)**: Decides to respond directly or request a tool call (web_search / factual_lookup).
+6. **If tool call → Orchestrator → Search**: Tavily web search executed for real-time data.
+7. **LLM (GPT-4o, temp=0)**: Synthesizes search results into accurate spoken response.
+8. **Orchestrator → TTS**: Accumulated text sent for synthesis.
+9. **TTS → Client**: `tts_audio_chunk` events streamed back via WebSocket.
 
 All events are **Pydantic v2-validated** with correlation IDs for end-to-end tracing.
 
@@ -158,10 +169,14 @@ All events are **Pydantic v2-validated** with correlation IDs for end-to-end tra
 
 | Component | Choice | Rationale |
 |-----------|--------|-----------|
-| **Language** | Python 3.12 | Mature async ecosystem, fast prototyping, strong ML/AI library support |
+| **Language** | Python 3.13 | Mature async ecosystem, fast prototyping, strong ML/AI library support |
 | **Framework** | FastAPI | Native WebSocket support, Pydantic v2 integration, async-first |
 | **Schema Validation** | Pydantic v2 | Strict JSON validation, discriminated unions, computed fields |
 | **HTTP Client** | httpx | Async streaming support, connection pooling, timeout control |
+| **Intent Detection** | OpenAI Function Calling | No separate service needed — LLM autonomously decides when to search |
+| **Web Search** | Tavily API | Purpose-built for AI agents, returns structured results + AI answer |
+| **LLM (Intent)** | GPT-4o-mini | Fast, cost-effective for routing decisions |
+| **LLM (Answer)** | GPT-4o | Superior instruction-following for accurate factual responses |
 | **Storage** | In-memory | Session-scoped ephemeral data — no persistence requirement |
 
 ### Trade-offs Accepted
@@ -198,7 +213,7 @@ Telemetry endpoint: `GET /telemetry/latency` returns P50/P95/P99 for all stages.
 ```
 src/
 ├── models/          # Pydantic event schemas, session, telemetry models
-├── services/        # ASR, LLM, TTS adapters + circuit breaker
+├── services/        # ASR, LLM, TTS, Search, Tools adapters + circuit breaker
 ├── pipeline/        # Orchestrator, session manager, replay engine
 ├── telemetry/       # Metrics, structured logger, dashboard
 ├── fallback/        # Bridge audio, fallback strategies
@@ -316,6 +331,8 @@ nano .env
 | `LLM_API_KEY` | `` (empty) | API key for LLM provider authentication |
 | `TTS_PROVIDER_URL` | `http://localhost:9000/tts/stream` | Text-to-speech provider endpoint (mock) or real provider URL |
 | `TTS_API_KEY` | `` (empty) | API key for TTS provider authentication |
+| `SEARCH_API_KEY` | `` (empty) | Tavily API key for web search (get free at tavily.com) |
+| `ENABLE_WEB_SEARCH` | `true` | Enable/disable web search intent detection |
 | `SERVER_HOST` | `0.0.0.0` | Server bind address |
 | `SERVER_PORT` | `8000` | Server port |
 | `SERVER_REQUIRE_TLS` | `false` | Enforce WebSocket Secure (WSS) for production |

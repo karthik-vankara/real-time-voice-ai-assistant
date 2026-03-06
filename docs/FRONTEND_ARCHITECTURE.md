@@ -138,12 +138,15 @@ WebSocketClient.onmessage
     ↓
 App.onMessage handler
     ├─ setEvents(prev => [event, ...prev].slice(0, 100))
+    ├─ If intent_detected: log intent + query to console
+    ├─ If web_search_result: log search query + source count
     └─ Keep last 100 events
     ↓
 EventsDisplay re-renders
     ├─ Map events to colored cards
-    ├─ Extract text from payload
+    ├─ Extract text from payload (incl. intent + search formatting)
     ├─ Show emoji + timestamp
+    ├─ New emojis: 🎯 (intent_detected), 🔍 (web_search_result)
     └─ Fade-in animation
 ```
 
@@ -205,9 +208,10 @@ TelemetryDashboard re-renders with new values
 ### EventsDisplay.tsx
 **Purpose:** Real-time event feed
 - Maps `events[]` array
-- Color-codes by event type
-- Extracts text from payload
+- Color-codes by event type (8 event types including `intent_detected`, `web_search_result`)
+- Extracts text from payload (formats intent and search result payloads)
 - Shows correlation_id
+- Emojis: 🔊 speech, 📝 transcription, ✅ final, 🎯 intent, 🔍 search, 🤖 LLM, 🔊 TTS, ❌ error
 - Scrollable with fade-in animation
 - Empty state message
 

@@ -35,6 +35,8 @@ export interface PipelineEvent {
     | 'speech_started'
     | 'transcription_provisional'
     | 'transcription_final'
+    | 'intent_detected'
+    | 'web_search_result'
     | 'llm_token'
     | 'tts_audio_chunk'
     | 'error'
@@ -45,42 +47,30 @@ export interface PipelineEvent {
 }
 ```
 
-**Why:** Type-safe event handling. Prevents runtime type errors.
+**Why:** Type-safe event handling. Includes new `intent_detected` and `web_search_result` events for the web search pipeline.
 
 ### Specialized Event Types
 ```typescript
-export interface TranscriptionEvent extends PipelineEvent {
-  event_type: 'transcription_provisional' | 'transcription_final'
+// ... existing TranscriptionEvent, LLMTokenEvent, TTSAudioChunkEvent, ErrorEvent ...
+
+export interface IntentDetectedEvent extends PipelineEvent {
+  event_type: 'intent_detected'
   payload: {
-    text: string                   // "hello how are you"
-    is_final: boolean              // true only for final
+    intent: string             // "web_search", "factual_lookup", or "direct_response"
+    query: string              // Search query (if applicable)
+    requires_search: boolean   // Whether web search will be executed
   }
 }
 
-export interface LLMTokenEvent extends PipelineEvent {
-  event_type: 'llm_token'
+export interface WebSearchResultEvent extends PipelineEvent {
+  event_type: 'web_search_result'
   payload: {
-    token: string                  // "I'm", "doing", "great", etc.
-  }
-}
-
-export interface TTSAudioChunkEvent extends PipelineEvent {
-  event_type: 'tts_audio_chunk'
-  payload: {
-    audio_base64: string           // Encoded audio bytes
-  }
-}
-
-export interface ErrorEvent extends PipelineEvent {
-  event_type: 'error'
-  payload: {
-    code: string                   // "INVALID_AUDIO", "SERVICE_ERROR"
-    message: string                // Error description
+    query: string              // The search query executed
+    results_summary: string    // Formatted search results summary
+    source_count: number       // Number of search results
   }
 }
 ```
-
-**Why:** Prevents payload field typos. IDE autocomplete works.
 
 ### LatencyMetrics Interface
 ```typescript
@@ -533,6 +523,10 @@ const getEventColor = (eventType: string) => {
       return 'bg-amber-900 border-amber-700'
     case 'transcription_final':
       return 'bg-green-900 border-green-700'
+    case 'intent_detected':
+      return 'bg-indigo-900 border-indigo-700'    // NEW
+    case 'web_search_result':
+      return 'bg-teal-900 border-teal-700'         // NEW
     case 'llm_token':
       return 'bg-purple-900 border-purple-700'
     case 'tts_audio_chunk':
@@ -543,7 +537,7 @@ const getEventColor = (eventType: string) => {
 }
 ```
 
-**Why:** Visual differentiation. User instantly sees which stage is happening.
+**Why:** Visual differentiation. New colors for intent detection (🎯 indigo) and search results (🔍 teal).
 
 ### Text Extraction
 ```typescript
@@ -553,11 +547,15 @@ const extractText = (event: PipelineEvent): string => {
   if (payload.token) return payload.token            // LLM tokens
   if (payload.accumulated_text) return payload.accumulated_text
   if (payload.message) return payload.message        // Error
+  // Intent detection events
+  if (payload.intent) return `Intent: ${payload.intent} | Query: ${payload.query}`
+  // Web search result events
+  if (payload.results_summary) return `Search: ${payload.query} (${payload.source_count} sources)`
   return JSON.stringify(payload)                     // Fallback
 }
 ```
 
-**Why:** Flexible payload handling. Different event types have different fields.
+**Why:** Flexible payload handling. Now includes formatting for intent detection and search result events.
 
 ### Rendering
 ```typescript

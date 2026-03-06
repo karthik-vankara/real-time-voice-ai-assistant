@@ -14,6 +14,7 @@ Integrates:
 from __future__ import annotations
 
 import asyncio
+import json
 import struct
 from collections.abc import AsyncIterator  # noqa: TC003
 
@@ -23,17 +24,23 @@ from src.fallback.strategies import build_fallback_audio_event, get_fallback_tex
 from src.models.events import (
     ErrorEvent,
     ErrorPayload,
+    IntentDetectedEvent,
+    IntentDetectedPayload,
     PipelineStage,
     SpeechStartedEvent,
     SpeechStartedPayload,
     TranscriptionFinalEvent,
     TranscriptionProvisionalEvent,
+    WebSearchResultEvent,
+    WebSearchResultPayload,
     _new_correlation_id,
 )
 from src.models.session import Session  # noqa: TC001
 from src.pipeline.session_manager import session_manager
-from src.services import asr, llm, tts
+from src.services import asr, llm, search, tts
 from src.services.circuit_breaker import CircuitBreaker, CircuitOpenError
+from src.services.llm import SYSTEM_PROMPT, ToolCallRequested
+from src.services.tools import AVAILABLE_TOOLS
 from src.telemetry.logger import logger
 from src.telemetry.metrics import LatencyTracker, aggregator
 
@@ -44,6 +51,7 @@ from src.telemetry.metrics import LatencyTracker, aggregator
 _asr_cb = CircuitBreaker("asr")
 _llm_cb = CircuitBreaker("llm")
 _tts_cb = CircuitBreaker("tts")
+_search_cb = CircuitBreaker("search")
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +341,16 @@ async def _run_llm(
     user_text: str,
     correlation_id: str,
 ) -> str:
-    """Run LLM through circuit breaker; on failure emit bridge audio (T025)."""
+    """Run LLM through circuit breaker with function calling support.
+
+    Flow:
+    1. Call LLM with tool definitions (web_search, factual_lookup)
+    2. If LLM returns a tool call → execute the tool → call LLM again with results
+    3. If LLM returns text directly → stream it as usual
+    On failure, emit bridge audio fallback.
+    """
+    from src.config import config as app_config
+
     logger.info(
         f"Starting LLM with user_text: '{user_text}' (len={len(user_text)})",
         correlation_id=correlation_id,
@@ -341,16 +358,26 @@ async def _run_llm(
     )
     llm_text = ""
 
+    # Determine if we should offer tools to the LLM
+    tools = AVAILABLE_TOOLS if app_config.provider.enable_web_search else None
+
     async def _llm_call() -> str:
         nonlocal llm_text
         text = ""
-        async for token_event in llm.generate_response_stream(
-            user_text,
-            session.context_texts,
-            correlation_id=correlation_id,
-        ):
-            text = token_event.payload.accumulated_text
-            await ws.send_json(token_event.model_dump(mode="json"))
+        try:
+            async for token_event in llm.generate_response_stream(
+                user_text,
+                session.context_texts,
+                correlation_id=correlation_id,
+                tools=tools,
+            ):
+                text = token_event.payload.accumulated_text
+                await ws.send_json(token_event.model_dump(mode="json"))
+        except ToolCallRequested as tcr:
+            # LLM wants to call a tool — handle it
+            text = await _handle_tool_call(
+                ws, session, user_text, tcr.tool_call, correlation_id
+            )
         return text
 
     try:
@@ -374,6 +401,125 @@ async def _run_llm(
         return get_fallback_text(PipelineStage.LLM)
 
     return llm_text
+
+
+async def _handle_tool_call(
+    ws: WebSocket,
+    session: Session,
+    user_text: str,
+    tool_call: "llm.ToolCallRequest",
+    correlation_id: str,
+) -> str:
+    """Execute a tool call from the LLM and stream the final response.
+
+    Steps:
+    1. Send IntentDetectedEvent to the client (UI feedback)
+    2. Execute the tool (web search or factual lookup)
+    3. Send WebSearchResultEvent to the client
+    4. Call LLM again with tool result in context
+    5. Stream final response tokens
+    """
+    tool_name = tool_call.name
+    tool_args = tool_call.arguments
+    search_query = tool_args.get("query", user_text)
+
+    # 1. Notify client about detected intent
+    intent_event = IntentDetectedEvent(
+        correlation_id=correlation_id,
+        payload=IntentDetectedPayload(
+            intent=tool_name,
+            query=search_query,
+            requires_search=True,
+        ),
+    )
+    await ws.send_json(intent_event.model_dump(mode="json"))
+
+    logger.info(
+        f"🔍 Intent detected: {tool_name}, query='{search_query}'",
+        correlation_id=correlation_id,
+        pipeline_stage="orchestrator",
+    )
+
+    # 2. Execute web search via circuit breaker
+    search_results = ""
+    try:
+        async def _search_call() -> str:
+            search_depth = "basic"
+            if tool_name == "factual_lookup":
+                search_depth = "advanced"
+            return await search.web_search(
+                search_query,
+                search_depth=search_depth,
+                correlation_id=correlation_id,
+            )
+
+        search_results = await _search_cb.call(_search_call)
+    except (CircuitOpenError, Exception) as exc:
+        logger.warning(
+            f"Search degraded: {exc} — falling back to LLM without search context",
+            correlation_id=correlation_id,
+            pipeline_stage="orchestrator",
+        )
+
+    # 3. Notify client about search results
+    if search_results:
+        source_count = search_results.count("Source: http")
+        search_event = WebSearchResultEvent(
+            correlation_id=correlation_id,
+            payload=WebSearchResultPayload(
+                query=search_query,
+                results_summary=search_results[:200] + ("..." if len(search_results) > 200 else ""),
+                source_count=source_count,
+            ),
+        )
+        await ws.send_json(search_event.model_dump(mode="json"))
+
+    # 4. Build messages for LLM call #2 (with tool result)
+    # Use a strict system prompt that forces exact number citation
+    search_system_prompt = (
+        "You are a voice assistant reading out search results. "
+        "Your ONLY job is to speak the exact data from the search results below. "
+        "Rules: "
+        "1) Quote ALL numbers EXACTLY as they appear — do NOT change, round, or estimate any number. "
+        "2) Keep it to 1-2 sentences, suitable for text-to-speech. "
+        "3) If the search says 24,450.45, you MUST say 24,450.45 — not 24,587 or any other number. "
+        "4) Mention the source name if available."
+    )
+    messages: list[dict] = [
+        {"role": "system", "content": search_system_prompt},
+        *session.context_texts,
+        {"role": "user", "content": user_text},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": tool_call.tool_call_id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_name,
+                        "arguments": json.dumps(tool_call.arguments),
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": tool_call.tool_call_id,
+            "content": search_results or f"No search results available for: {search_query}",
+        },
+    ]
+
+    # 5. Stream final response from LLM (call #2, no tools)
+    text = ""
+    async for token_event in llm.generate_response_with_tool_result(
+        messages,
+        correlation_id=correlation_id,
+    ):
+        text = token_event.payload.accumulated_text
+        await ws.send_json(token_event.model_dump(mode="json"))
+
+    return text
 
 
 async def _run_tts(

@@ -24,6 +24,8 @@ class EventType(StrEnum):
     SPEECH_STARTED = "speech_started"
     TRANSCRIPTION_PROVISIONAL = "transcription_provisional"
     TRANSCRIPTION_FINAL = "transcription_final"
+    INTENT_DETECTED = "intent_detected"
+    WEB_SEARCH_RESULT = "web_search_result"
     LLM_TOKEN_GENERATED = "llm_token_generated"
     TTS_AUDIO_CHUNK = "tts_audio_chunk"
     ERROR = "error"
@@ -36,6 +38,7 @@ class PipelineStage(StrEnum):
     ASR = "asr"
     LLM = "llm"
     TTS = "tts"
+    SEARCH = "search"
     ORCHESTRATOR = "orchestrator"
     FALLBACK = "fallback"
 
@@ -98,6 +101,24 @@ class TTSAudioChunkPayload(BaseModel):
     is_last: bool = False
 
 
+class IntentDetectedPayload(BaseModel):
+    """Payload for intent detection events."""
+
+    model_config = ConfigDict(frozen=True)
+    intent: str  # "web_search", "factual_lookup", or "direct_response"
+    query: str = ""  # Search query (if applicable)
+    requires_search: bool = False
+
+
+class WebSearchResultPayload(BaseModel):
+    """Payload for web search result events."""
+
+    model_config = ConfigDict(frozen=True)
+    query: str
+    results_summary: str
+    source_count: int = 0
+
+
 class ErrorPayload(BaseModel):
     """Payload for error events (FR-018 and others)."""
 
@@ -151,6 +172,18 @@ class TTSAudioChunkEvent(_EventBase):
     payload: TTSAudioChunkPayload
 
 
+class IntentDetectedEvent(_EventBase):
+    event_type: Literal[EventType.INTENT_DETECTED] = EventType.INTENT_DETECTED
+    source_stage: Literal[PipelineStage.LLM] = PipelineStage.LLM
+    payload: IntentDetectedPayload
+
+
+class WebSearchResultEvent(_EventBase):
+    event_type: Literal[EventType.WEB_SEARCH_RESULT] = EventType.WEB_SEARCH_RESULT
+    source_stage: Literal[PipelineStage.SEARCH] = PipelineStage.SEARCH
+    payload: WebSearchResultPayload
+
+
 class ErrorEvent(_EventBase):
     event_type: Literal[EventType.ERROR] = EventType.ERROR
     source_stage: PipelineStage = PipelineStage.ORCHESTRATOR
@@ -165,6 +198,8 @@ PipelineEvent = Annotated[
     SpeechStartedEvent
     | TranscriptionProvisionalEvent
     | TranscriptionFinalEvent
+    | IntentDetectedEvent
+    | WebSearchResultEvent
     | LLMTokenEvent
     | TTSAudioChunkEvent
     | ErrorEvent,

@@ -166,31 +166,35 @@ Frontend: EventsDisplay shows green "✅ Transcription Final" card
     └─ Shows timestamp
 ```
 
-### Phase 3: LLM (Context + Prompt → Response) = ~140-150ms
+### Phase 3: LLM Intent Detection + Optional Web Search
+
+**LLM Call #1 — Intent Detection (GPT-4o-mini)**
 ```
 Get 10-turn conversation history from session
     ├─ Last user: "..."
     ├─ Last assistant: "..."
     └─ ... (up to 10 turns)
     ↓
-Build LLM prompt:
-```
-System: You are a friendly voice assistant.
-Context:
-User: Hello, how are you?
-Assistant: I'm doing well.
-
-Current User: Hello, how are you?
-Respond naturally in 1-2 sentences.
-```
+Build LLM prompt with tool definitions:
+    system: "You are a helpful voice assistant..."
+    tools: [web_search, factual_lookup]
+    tool_choice: "auto"
+    model: gpt-4o-mini
+    temperature: 0.7
     ↓
 LatencyTracker.start("llm")
     ↓
-LLMService.generate(prompt, context):
-    ├─ If mode="mock": return "I'm doing great!"
-    ├─ If mode="real": Stream from OpenAI GPT-4
-    ↓
-Receive tokens: "I'm", " doing", " great", "!", etc.
+LLMService.generate_response_stream(prompt, context, tools):
+    ├─ Streams tokens from OpenAI API (SSE)
+    ├─ Monitors for tool_calls in delta responses
+    └─ Decision point:
+       ├─ If general conversation → yields text tokens directly
+       └─ If needs real-time data → raises ToolCallRequested exception
+```
+
+**Path A: Direct Response (No Search Needed)**
+```
+LLM returns text tokens: "I'm", " doing", " great", "!"
     ↓
 LatencyTracker.stop("llm")
     ↓
@@ -202,8 +206,60 @@ For each token, create LLMTokenEvent:
 await ws.send_json(token_event) for each token (streamed)
     ↓
 Frontend: EventsDisplay shows purple cards
-    ├─ One card per token: "I'm", "doing", "great", "!"
-    └─ User sees response being generated in real-time
+```
+
+**Path B: Web Search Required**
+```
+LLM returns tool_call: web_search({"query": "Nifty 50 live price today"})
+    ↓
+ToolCallRequested exception caught by orchestrator
+    ↓
+_handle_tool_call() invoked:
+    ↓
+Step 1: Emit IntentDetectedEvent
+    ├─ event_type: "intent_detected"
+    ├─ payload.intent: "web_search"
+    ├─ payload.query: "Nifty 50 live price today"
+    └─ payload.requires_search: true
+    ↓
+await ws.send_json(intent_event)
+    ↓
+Frontend: Shows 🎯 "Intent Detected: web_search" card
+    ↓
+Step 2: Execute Tavily Web Search
+    ├─ Search depth: "advanced"
+    ├─ Max results: 5
+    ├─ Include AI answer: true
+    ├─ Protected by circuit breaker (_search_cb)
+    └─ Timeout: 10 seconds
+    ↓
+Tavily returns:
+    ├─ Quick Answer: "Nifty 50 is at 24,450.45"
+    └─ 5 search results with titles, content, URLs
+    ↓
+Step 3: Emit WebSearchResultEvent
+    ├─ event_type: "web_search_result"
+    ├─ payload.query: "Nifty 50 live price today"
+    └─ payload.source_count: 5
+    ↓
+await ws.send_json(search_result_event)
+    ↓
+Frontend: Shows 🔍 "Search: Nifty 50... (5 sources)" card
+    ↓
+Step 4: LLM Call #2 — Answer Synthesis (GPT-4o, temp=0)
+    ├─ System prompt: "Your ONLY job is to speak the exact data
+    │   from the search results. Quote ALL numbers EXACTLY."
+    ├─ Messages: [system, original user msg, assistant tool call,
+    │   tool result with search data]
+    ├─ Model: gpt-4o (better instruction following)
+    └─ Temperature: 0 (deterministic, no hallucination)
+    ↓
+LLM returns: "The Nifty 50 is currently at 24,450.45..."
+    ↓
+Tokens streamed as LLMTokenEvents
+    ↓
+Frontend: Shows purple token cards with exact data
+```
 ```
 
 ### Phase 4: TTS (Text → Audio) = ~130-140ms
@@ -463,7 +519,7 @@ t=3000ms:  Frontend polls telemetry again
 ## 🎯 Key Takeaways
 
 ### Data Flow
-**User mic → Browser Web Audio API → 16-bit PCM conversion → WebSocket binary → Server → ASR/LLM/TTS → Events back via WebSocket → React state → UI update**
+**User mic → Browser Web Audio API → 16-bit PCM conversion → WebSocket binary → Server → ASR → LLM (intent) → [Web Search] → LLM (answer) → TTS → Events back via WebSocket → React state → UI update**
 
 ### Concurrency
 - Frontend: Single-threaded (JavaScript event loop)

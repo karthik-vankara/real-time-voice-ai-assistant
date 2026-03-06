@@ -27,7 +27,7 @@ from fastapi.responses import StreamingResponse
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-app = FastAPI(title="Mock Providers", description="Mock ASR/LLM/TTS for testing")
+app = FastAPI(title="Mock Providers", description="Mock ASR/LLM/TTS/Search for testing")
 
 
 @app.get("/health")
@@ -184,11 +184,49 @@ async def tts_stream(request: Request):
     return StreamingResponse(generate(), media_type="application/x-ndjson")
 
 
+# ============================================================================
+# Search Mock (Web Search)
+# ============================================================================
+
+
+@app.post("/search/query")
+async def search_query(request: Request):
+    """Mock web search endpoint.
+
+    Receives: JSON with {"query": str, "search_depth": str, "max_results": int}
+    Returns: JSON with Tavily-like response format
+    """
+    try:
+        body = await request.json()
+        query = body.get("query", "test search")
+    except Exception:
+        query = "test search"
+
+    await asyncio.sleep(0.1)  # Simulate search latency
+
+    return {
+        "answer": f"Mock search answer for: {query}",
+        "results": [
+            {
+                "title": f"Mock Result 1 - {query}",
+                "content": f"This is a mock search result for the query '{query}'. It contains relevant information that would normally come from the internet.",
+                "url": "https://example.com/result1",
+            },
+            {
+                "title": f"Mock Result 2 - {query}",
+                "content": f"Another mock result providing additional context about '{query}'.",
+                "url": "https://example.com/result2",
+            },
+        ],
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
 
     print("🚀 Starting mock providers on http://localhost:9000")
-    print("   ASR:  POST http://localhost:9000/asr/stream")
-    print("   LLM:  POST http://localhost:9000/llm/stream")
-    print("   TTS:  POST http://localhost:9000/tts/stream")
+    print("   ASR:    POST http://localhost:9000/asr/stream")
+    print("   LLM:    POST http://localhost:9000/llm/stream")
+    print("   TTS:    POST http://localhost:9000/tts/stream")
+    print("   Search: POST http://localhost:9000/search/query")
     uvicorn.run(app, host="0.0.0.0", port=9000, log_level="info")

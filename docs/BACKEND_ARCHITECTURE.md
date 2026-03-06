@@ -10,6 +10,9 @@
 | Data Validation | Pydantic | v2 2.12.5 | Type-safe configuration & models |
 | HTTP Client | httpx | Async | Non-blocking API calls |
 | Async Utilities | asyncio | Built-in | Concurrency primitives |
+| Web Search | Tavily API | v0.7.22 | Real-time web search for AI agents |
+| LLM (Intent) | GPT-4o-mini | via OpenAI | Fast intent classification + function calling |
+| LLM (Answer) | GPT-4o | via OpenAI | Accurate factual response synthesis |
 
 ## Directory Structure
 
@@ -30,8 +33,10 @@ src/
 │   ├── __init__.py
 │   ├── circuit_breaker.py           # Fault tolerance pattern
 │   ├── asr.py                       # Speech-to-text service
-│   ├── llm.py                       # Language model service
-│   └── tts.py                       # Text-to-speech service
+│   ├── llm.py                       # Language model service (dual-model: intent + answer)
+│   ├── tts.py                       # Text-to-speech service
+│   ├── search.py                    # Web search service (Tavily API)
+│   └── tools.py                     # OpenAI function calling tool definitions
 │
 ├── pipeline/                        # Core processing logic
 │   ├── __init__.py
@@ -64,8 +69,10 @@ src/
 - **Main coordinator** for entire voice processing pipeline
 - Manages per-session state
 - Receives audio frames from client
-- Triggers ASR → LLM → TTS stages
-- Emits events back to client
+- Triggers ASR → LLM (Intent) → [Web Search] → LLM (Answer) → TTS stages
+- Uses OpenAI function calling for intent detection
+- Routes tool calls to web search service
+- Emits events back to client (including `intent_detected`, `web_search_result`)
 - Tracks latency per request
 - Implements barge-in support
 
@@ -75,19 +82,27 @@ src/
 - Tracks session timeout
 - Provides cleanup on disconnect
 
-### 4. **Service Layer** (ASR, LLM, TTS)
+### 4. **Service Layer** (ASR, LLM, TTS, Search, Tools)
 Each service:
-- Calls external API (OpenAI, HuggingFace, etc)
+- Calls external API (OpenAI, Tavily, etc)
 - Or calls mock provider for development
 - Has its own circuit breaker
 - Returns structured results
 - Integrates with latency tracking
+
+**New services:**
+- **Search** (`search.py`): Tavily API adapter for web search. Supports advanced/basic depth, 1-5 results, AI-generated answers.
+- **Tools** (`tools.py`): OpenAI function calling tool definitions (`web_search`, `factual_lookup`).
+- **LLM** (`llm.py`): Now supports dual-model architecture:
+  - Call #1 (GPT-4o-mini, temp=0.7): Intent detection with function calling tools
+  - Call #2 (GPT-4o, temp=0): Answer synthesis from search results with strict system prompt
 
 ### 5. **Circuit Breaker** (`circuit_breaker.py`)
 - Tracks failures per service
 - States: CLOSED → OPEN → HALF_OPEN
 - Protects against cascading failures
 - Auto-recovery with exponential backoff
+- Independent breakers for ASR, LLM, TTS, and Search
 
 ### 6. **Telemetry System** (`metrics.py`, `dashboard.py`)
 - Captures timestamps at stage boundaries
@@ -103,7 +118,7 @@ Each service:
 - Server settings (host, port, TLS)
 
 ### 8. **Models** (`models/`)
-- **events.py**: EventType enums, event payload structures
+- **events.py**: EventType enums, event payload structures (including `IntentDetectedEvent`, `WebSearchResultEvent`)
 - **session.py**: Session, ConversationTurn for history tracking
 - **telemetry.py**: LatencyRecord for metrics
 
@@ -138,8 +153,14 @@ _run_pipeline():
     ├─→ Emit: transcription_final event
     │
     ├─→ LatencyTracker.start("llm")
-    ├─→ _run_llm() + 10-turn history
-    ├─→ LLM Service → Response tokens
+    ├─→ _run_llm() + 10-turn history + tool definitions
+    ├─→ LLM Call #1 (GPT-4o-mini): Intent detection
+    │   ├─ Path A: Direct response → stream tokens
+    │   └─ Path B: ToolCallRequested → _handle_tool_call()
+    │       ├─ Emit: intent_detected event
+    │       ├─ Execute Tavily web search (circuit breaker)
+    │       ├─ Emit: web_search_result event
+    │       └─ LLM Call #2 (GPT-4o, temp=0): Synthesize answer
     ├─→ LatencyTracker.stop("llm")
     ├─→ Emit: llm_token events (stream)
     │
@@ -223,8 +244,9 @@ Fallback Strategies:
 
 ### 3. Fallback Services
 - If OpenAI Whisper fails → Mock ASR
-- If GPT-4 fails → Mock LLM
+- If GPT-4o fails → Mock LLM
 - If TTS fails → Synthesized "error" audio
+- If Tavily Search fails → Graceful skip (LLM answers without search)
 
 ### 4. Graceful Degradation
 - User gets error event with explanation
@@ -256,6 +278,10 @@ SERVER_WS_PATH=/ws
 # API Keys
 OPENAI_API_KEY=sk-...
 HUGGINGFACE_API_KEY=hf_...
+SEARCH_API_KEY=tvly-...   # Tavily API key for web search
+
+# Web Search
+ENABLE_WEB_SEARCH=true|false  # Feature flag to toggle search
 
 # Latency budgets
 ASR_BUDGET_MS=500
